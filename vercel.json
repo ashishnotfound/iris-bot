@@ -1,22 +1,32 @@
 {
+  "functions": {
+    "api/*.py": {
+      "includeFiles": "lib/**"
+    }
+  },
   "builds": [
     {
       "src": "api/*.py",
-      "use": "@vercel/python"
+      "use": "@vercel/python",
+      "config": {
+        "includeFiles": ["lib/**", "requirements.txt"]
+      }
     }
   ],
   "routes": [
     {
       "src": "/api/webhook",
-      "dest": "/api/webhook.py"
+      "dest": "api/webhook.py"
     },
     {
       "src": "/api/cron",
-      "dest": "/api/cron.py"
-    },
+      "dest": "api/cron.py"
+    }
+  ],
+  "crons": [
     {
-      "src": "/api(.*)",
-      "dest": "/api/index.py"
+      "path": "/api/cron",
+      "schedule": "0 0 * * *"
     }
   ]
 }
