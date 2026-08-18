@@ -44,7 +44,7 @@ def is_allowed(chat_id: int | str) -> bool:
 
 def validate_webhook_secret(header_value: Optional[str]) -> bool:
     """Verify the X-Telegram-Bot-Api-Secret-Token header."""
-    expected = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "").strip()
+    expected = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "iris_secret_token_8916712872_v1").strip()
     if not expected:
         return True
     if not header_value:
