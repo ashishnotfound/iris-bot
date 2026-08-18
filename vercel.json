@@ -1,4 +1,15 @@
 {
+  "functions": {
+    "api/**/*.py": {
+      "maxDuration": 60
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/$1.py"
+    }
+  ],
   "crons": [
     {
       "path": "/api/cron",
