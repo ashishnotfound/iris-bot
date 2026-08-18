@@ -300,6 +300,42 @@ _stt = GroqSTT()
 _router = TaskRouter()
 
 
+def _is_update_processed(update_id: int) -> bool:
+    """Check if a Telegram update_id was already processed in Supabase."""
+    import requests
+    base = _supabase_url()
+    if not base or not update_id:
+        return False
+    try:
+        r = requests.get(
+            f"{base}/rest/v1/processed_updates",
+            headers=_supabase_headers(),
+            params={"update_id": f"eq.{update_id}", "select": "update_id"},
+            timeout=4,
+        )
+        return r.status_code == 200 and bool(r.json())
+    except Exception:
+        return False
+
+
+def _mark_update_processed(update_id: int, chat_id: int) -> bool:
+    """Mark a Telegram update_id as processed in Supabase."""
+    import requests
+    base = _supabase_url()
+    if not base or not update_id:
+        return False
+    try:
+        r = requests.post(
+            f"{base}/rest/v1/processed_updates",
+            headers=_supabase_headers(),
+            json={"update_id": update_id, "chat_id": chat_id},
+            timeout=4,
+        )
+        return r.status_code in (200, 201)
+    except Exception:
+        return False
+
+
 def execute_agent_turn(
     chat_id: int,
     user_message: str,
@@ -452,42 +488,6 @@ def execute_agent_turn(
     # 12. Persist messages
     _save_message(chat_id, session_id, "user", user_content)
     _save_message(chat_id, session_id, "assistant", reply)
-
-def _is_update_processed(update_id: int) -> bool:
-    """Check if a Telegram update_id was already processed in Supabase."""
-    import requests
-    base = _supabase_url()
-    if not base or not update_id:
-        return False
-    try:
-        r = requests.get(
-            f"{base}/rest/v1/processed_updates",
-            headers=_supabase_headers(),
-            params={"update_id": f"eq.{update_id}", "select": "update_id"},
-            timeout=4,
-        )
-        return r.status_code == 200 and bool(r.json())
-    except Exception:
-        return False
-
-
-def _mark_update_processed(update_id: int, chat_id: int) -> bool:
-    """Mark a Telegram update_id as processed in Supabase."""
-    import requests
-    base = _supabase_url()
-    if not base or not update_id:
-        return False
-    try:
-        r = requests.post(
-            f"{base}/rest/v1/processed_updates",
-            headers=_supabase_headers(),
-            json={"update_id": update_id, "chat_id": chat_id},
-            timeout=4,
-        )
-        return r.status_code in (200, 201)
-    except Exception:
-        return False
-
 
     # 13. Send reply
     telegram_client.send_message(chat_id, reply)
