@@ -12,11 +12,11 @@
   "routes": [
     {
       "src": "/api/webhook",
-      "dest": "api/webhook.py"
+      "dest": "/api/webhook.py"
     },
     {
       "src": "/api/cron",
-      "dest": "api/cron.py"
+      "dest": "/api/cron.py"
     }
   ],
   "crons": [
