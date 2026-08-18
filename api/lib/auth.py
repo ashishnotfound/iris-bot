@@ -48,7 +48,7 @@ def validate_webhook_secret(header_value: Optional[str]) -> bool:
     if not expected:
         return True
     if not header_value:
-        return True
+        return False
     return hmac.compare_digest(
         header_value.encode("utf-8"),
         expected.encode("utf-8"),
