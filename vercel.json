@@ -1,7 +1,7 @@
 {
   "version": 2,
   "framework": null,
-  "outputDirectory": "public",
+  "outputDirectory": "build",
   "builds": [
     {
       "src": "api/*.py",

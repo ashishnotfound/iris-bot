@@ -11,8 +11,8 @@
     "tests-js"
   ],
   "scripts": {
-    "build": "node -e \"require('fs').mkdirSync('public', {recursive: true})\"",
-    "vercel-build": "node -e \"require('fs').mkdirSync('public', {recursive: true})\"",
+    "build": "node -e \"const fs=require('fs'); fs.mkdirSync('build',{recursive:true}); fs.mkdirSync('public',{recursive:true}); if(!fs.existsSync('build/index.html')) fs.writeFileSync('build/index.html','OK'); if(!fs.existsSync('public/index.html')) fs.writeFileSync('public/index.html','OK');\"",
+    "vercel-build": "node -e \"const fs=require('fs'); fs.mkdirSync('build',{recursive:true}); fs.mkdirSync('public',{recursive:true}); if(!fs.existsSync('build/index.html')) fs.writeFileSync('build/index.html','OK'); if(!fs.existsSync('public/index.html')) fs.writeFileSync('public/index.html','OK');\"",
     "postinstall": "echo '✅ Node dependencies installed. Run: python run_agent.py --help'",
     "install:root": "npm install --workspaces=false",
     "install:web": "npm install --workspace web",
