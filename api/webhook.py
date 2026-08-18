@@ -19,7 +19,7 @@ for p in [str(api_dir), str(workspace_dir)]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from lib.auth import is_allowed, validate_webhook_secret
+from lib.auth import is_allowed
 from lib.hermes_runner import (
     execute_agent_turn,
     _is_update_processed,
@@ -36,11 +36,6 @@ class handler(BaseHTTPRequestHandler):
             body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else ""
         except Exception as e:
             self._send_json(400, {"error": f"Failed to read body: {e}"})
-            return
-
-        secret_header = self.headers.get("X-Telegram-Bot-Api-Secret-Token") or self.headers.get("x-telegram-bot-api-secret-token")
-        if not validate_webhook_secret(secret_header):
-            self._send_json(401, {"error": "Unauthorized webhook secret"})
             return
 
         try:
