@@ -1,29 +1,12 @@
 {
-  "builds": [
+  "rewrites": [
     {
-      "src": "api/*.py",
-      "use": "@vercel/python"
+      "source": "/api/webhook",
+      "destination": "/api/webhook.py"
     },
     {
-      "src": "package.json",
-      "use": "@vercel/static-build",
-      "config": {
-        "distDir": "web/dist"
-      }
-    }
-  ],
-  "routes": [
-    {
-      "src": "/api/webhook",
-      "dest": "api/webhook.py"
-    },
-    {
-      "src": "/api/cron",
-      "dest": "api/cron.py"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/"
+      "source": "/api/cron",
+      "destination": "/api/cron.py"
     }
   ],
   "crons": [

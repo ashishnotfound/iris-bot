@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import sys
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 # Ensure workspace root is in sys.path
@@ -28,97 +29,66 @@ from lib.hermes_runner import (
 logger = logging.getLogger(__name__)
 
 
-def handler(request):
-    """Vercel Python serverless HTTP entrypoint for Telegram webhook POST."""
-    method = getattr(request, "method", "POST")
-    if isinstance(method, str):
-        method = method.upper()
-    else:
-        method = "POST"
+class handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else ""
+        except Exception as e:
+            self._send_json(400, {"error": f"Failed to read body: {e}"})
+            return
 
-    if method != "POST":
-        return {
-            "statusCode": 405,
-            "headers": {"Content-Type": "application/json"},
-            "body": json.dumps({"error": "Method not allowed"}),
-        }
+        secret_header = self.headers.get("X-Telegram-Bot-Api-Secret-Token") or self.headers.get("x-telegram-bot-api-secret-token")
+        if not validate_webhook_secret(secret_header):
+            self._send_json(401, {"error": "Unauthorized webhook secret"})
+            return
 
-    # Validate secret header if set
-    secret_header = None
-    headers = getattr(request, "headers", {})
-    if isinstance(headers, dict):
-        secret_header = headers.get("X-Telegram-Bot-Api-Secret-Token") or headers.get("x-telegram-bot-api-secret-token")
+        try:
+            update = json.loads(body) if body else {}
+        except Exception as e:
+            self._send_json(400, {"error": f"Invalid JSON payload: {e}"})
+            return
 
-    if not validate_webhook_secret(secret_header):
-        return {
-            "statusCode": 401,
-            "headers": {"Content-Type": "application/json"},
-            "body": json.dumps({"error": "Unauthorized webhook secret"}),
-        }
+        update_id = update.get("update_id")
+        message = update.get("message") or update.get("edited_message") or {}
+        chat = message.get("chat", {})
+        chat_id = chat.get("id")
+        text = message.get("text") or message.get("caption") or ""
+        photo = message.get("photo")
+        voice = message.get("voice")
 
-    # Parse update body
-    try:
-        body = getattr(request, "body", b"")
-        if isinstance(body, bytes):
-            body = body.decode("utf-8")
-        update = json.loads(body) if body else {}
-    except Exception as e:
-        return {
-            "statusCode": 400,
-            "headers": {"Content-Type": "application/json"},
-            "body": json.dumps({"error": f"Invalid JSON payload: {e}"}),
-        }
+        if not chat_id:
+            self._send_json(200, {"status": "ignored", "reason": "no_chat_id"})
+            return
 
-    update_id = update.get("update_id")
-    message = update.get("message") or update.get("edited_message") or {}
-    chat = message.get("chat", {})
-    chat_id = chat.get("id")
-    text = message.get("text") or message.get("caption") or ""
-    photo = message.get("photo")
-    voice = message.get("voice")
+        if not is_allowed(chat_id):
+            self._send_json(200, {"status": "unauthorized"})
+            return
 
-    if not chat_id:
-        return {
-            "statusCode": 200,
-            "headers": {"Content-Type": "application/json"},
-            "body": json.dumps({"status": "ignored", "reason": "no_chat_id"}),
-        }
+        if update_id and _is_update_processed(update_id):
+            self._send_json(200, {"status": "skipped", "reason": "already_processed"})
+            return
 
-    if not is_allowed(chat_id):
-        return {
-            "statusCode": 200,
-            "headers": {"Content-Type": "application/json"},
-            "body": json.dumps({"status": "unauthorized"}),
-        }
+        if update_id:
+            _mark_update_processed(update_id, chat_id)
 
-    # Idempotency check
-    if update_id and _is_update_processed(update_id):
-        return {
-            "statusCode": 200,
-            "headers": {"Content-Type": "application/json"},
-            "body": json.dumps({"status": "skipped", "reason": "already_processed"}),
-        }
+        try:
+            result = execute_agent_turn(
+                chat_id=chat_id,
+                user_message=text,
+                photo=photo,
+                voice=voice,
+            )
+            self._send_json(200, result)
+        except Exception as e:
+            logger.error("Webhook processing failed: %s", e, exc_info=True)
+            self._send_json(500, {"status": "error", "error": str(e)})
 
-    if update_id:
-        _mark_update_processed(update_id, chat_id)
+    def do_GET(self):
+        self._send_json(200, {"status": "ok", "service": "Iris Telegram Webhook"})
 
-    # Execute turn
-    try:
-        result = execute_agent_turn(
-            chat_id=chat_id,
-            user_message=text,
-            photo=photo,
-            voice=voice,
-        )
-        return {
-            "statusCode": 200,
-            "headers": {"Content-Type": "application/json"},
-            "body": json.dumps(result),
-        }
-    except Exception as e:
-        logger.error("Webhook processing failed: %s", e, exc_info=True)
-        return {
-            "statusCode": 500,
-            "headers": {"Content-Type": "application/json"},
-            "body": json.dumps({"status": "error", "error": str(e)}),
-        }
+    def _send_json(self, status_code: int, data: dict):
+        self.send_response(status_code)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode("utf-8"))
