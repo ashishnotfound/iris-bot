@@ -1,0 +1,39 @@
+# Production Dockerfile for Hermes Cloud Telegram Agent
+# Optimized for Render Free Tier ($0, No Credit Card Required) & Cloud Container Hosts
+FROM python:3.11-slim
+
+# Prevent Python output buffering & byte code generation
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV HERMES_HOME=/opt/hermes_data
+
+# Create working directory and storage volume
+WORKDIR /app
+RUN mkdir -p /opt/hermes_data
+
+# Install essential system dependencies (ripgrep, git, ffmpeg, curl)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    git \
+    ripgrep \
+    ffmpeg \
+    gcc \
+    g++ \
+    make \
+    python3-dev \
+    libffi-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv package manager
+RUN pip install --no-cache-dir uv
+
+# Copy repository requirements and install Hermes Agent dependencies
+COPY . /app
+RUN uv pip install --system -e ".[all]" || pip install --no-cache-dir -e "."
+
+# Expose default HTTP health port for Render (10000)
+EXPOSE 10000
+
+# Set entrypoint script
+CMD ["python3", "/app/cloud/cloud_start.py"]

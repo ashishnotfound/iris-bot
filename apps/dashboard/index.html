@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hermes Cloud Telegram Agent — Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-dark: #0a0c10;
+      --card-bg: rgba(22, 27, 34, 0.75);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --accent-purple: #8b5cf6;
+      --accent-cyan: #06b6d4;
+      --accent-green: #10b981;
+      --text-main: #f3f4f6;
+      --text-muted: #9ca3af;
+      --glow-purple: rgba(139, 92, 246, 0.25);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Outfit', sans-serif;
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      min-height: 100vh;
+      padding: 2rem 1rem;
+      background-image: 
+        radial-gradient(at 0% 0%, rgba(139, 92, 246, 0.15) 0px, transparent 50%),
+        radial-gradient(at 100% 100%, rgba(6, 182, 212, 0.15) 0px, transparent 50%);
+    }
+
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 3rem;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.35rem 0.85rem;
+      background: rgba(16, 185, 129, 0.1);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      border-radius: 9999px;
+      color: var(--accent-green);
+      font-size: 0.875rem;
+      font-weight: 500;
+      margin-bottom: 1rem;
+    }
+
+    .badge-dot {
+      width: 8px;
+      height: 8px;
+      background-color: var(--accent-green);
+      border-radius: 50%;
+      box-shadow: 0 0 8px var(--accent-green);
+    }
+
+    h1 {
+      font-size: 2.75rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, #ffffff 0%, #a5b4fc 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 0.75rem;
+    }
+
+    p.subtitle {
+      color: var(--text-muted);
+      font-size: 1.1rem;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 1.5rem;
+      margin-bottom: 2rem;
+    }
+
+    .card {
+      background: var(--card-bg);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 1.75rem;
+      transition: transform 0.2s ease, border-color 0.2s ease;
+    }
+
+    .card:hover {
+      transform: translateY(-2px);
+      border-color: rgba(139, 92, 246, 0.4);
+    }
+
+    .card-title {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .stat-list {
+      list-style: none;
+    }
+
+    .stat-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.6rem 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      font-size: 0.95rem;
+    }
+
+    .stat-item:last-child {
+      border-bottom: none;
+    }
+
+    .stat-label {
+      color: var(--text-muted);
+    }
+
+    .stat-value {
+      font-weight: 500;
+      color: var(--text-main);
+    }
+
+    .code-block {
+      font-family: 'JetBrains Mono', monospace;
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      padding: 0.85rem;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      color: #38bdf8;
+      overflow-x: auto;
+    }
+
+    .cmd-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 0.5rem;
+    }
+
+    .cmd-table th, .cmd-table td {
+      text-align: left;
+      padding: 0.75rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      font-size: 0.9rem;
+    }
+
+    .cmd-table th {
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    footer {
+      text-align: center;
+      margin-top: 3rem;
+      color: var(--text-muted);
+      font-size: 0.875rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="badge">
+        <span class="badge-dot"></span> 24/7 Cloud Service Active ($0 Target)
+      </div>
+      <h1>Hermes Cloud Telegram Agent</h1>
+      <p class="subtitle">Autonomous AI Personal Agent powered by Nous Research Hermes Agent</p>
+    </header>
+
+    <div class="grid">
+      <div class="card">
+        <div class="card-title">🤖 Gateway Status</div>
+        <ul class="stat-list">
+          <li class="stat-item">
+            <span class="stat-label">Platform</span>
+            <span class="stat-value">Telegram Bot API</span>
+          </li>
+          <li class="stat-item">
+            <span class="stat-label">Host Compute</span>
+            <span class="stat-value">Cloud Docker Space</span>
+          </li>
+          <li class="stat-item">
+            <span class="stat-label">LLM Provider</span>
+            <span class="stat-value">Google AI Studio (Gemini)</span>
+          </li>
+          <li class="stat-item">
+            <span class="stat-label">Execution Backend</span>
+            <span class="stat-value">Vercel Sandbox / Container</span>
+          </li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-title">🛡️ Security & Access</div>
+        <ul class="stat-list">
+          <li class="stat-item">
+            <span class="stat-label">Telegram User Whitelist</span>
+            <span class="stat-value" style="color: var(--accent-green)">Enforced</span>
+          </li>
+          <li class="stat-item">
+            <span class="stat-label">Public Access</span>
+            <span class="stat-value" style="color: #f43f5e">Blocked</span>
+          </li>
+          <li class="stat-item">
+            <span class="stat-label">Secrets Storage</span>
+            <span class="stat-value">Environment Variables</span>
+          </li>
+          <li class="stat-item">
+            <span class="stat-label">Sandbox Isolation</span>
+            <span class="stat-value">MicroVM Container</span>
+          </li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom: 2rem;">
+      <div class="card-title">📱 Telegram Commands Quick Reference</div>
+      <table class="cmd-table">
+        <thead>
+          <tr>
+            <th>Command</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="code-block">/start</span></td>
+            <td>Initialize conversation and view agent status</td>
+          </tr>
+          <tr>
+            <td><span class="code-block">/status</span></td>
+            <td>Check active tasks, LLM model, and system health</td>
+          </tr>
+          <tr>
+            <td><span class="code-block">/reset</span> or <span class="code-block">/new</span></td>
+            <td>Start a fresh conversation turn while preserving long-term memory</td>
+          </tr>
+          <tr>
+            <td><span class="code-block">/stop</span></td>
+            <td>Interrupt active task execution</td>
+          </tr>
+          <tr>
+            <td><span class="code-block">/model</span></td>
+            <td>View or switch active LLM provider and model</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <footer>
+      Powered by <strong>Nous Research Hermes Agent</strong> &bull; Cloud Hosted &bull; $0 Target Architecture
+    </footer>
+  </div>
+</body>
+</html>
