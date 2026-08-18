@@ -11,7 +11,8 @@
     "tests-js"
   ],
   "scripts": {
-    "build": "echo 'No build step required'",
+    "build": "node -e \"require('fs').mkdirSync('public', {recursive: true})\"",
+    "vercel-build": "node -e \"require('fs').mkdirSync('public', {recursive: true})\"",
     "postinstall": "echo '✅ Node dependencies installed. Run: python run_agent.py --help'",
     "install:root": "npm install --workspaces=false",
     "install:web": "npm install --workspace web",
