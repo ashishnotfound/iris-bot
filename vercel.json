@@ -1,11 +1,7 @@
 {
   "builds": [
     {
-      "src": "api/webhook.py",
-      "use": "@vercel/python"
-    },
-    {
-      "src": "api/cron.py",
+      "src": "api/*.py",
       "use": "@vercel/python"
     }
   ],
@@ -17,12 +13,10 @@
     {
       "src": "/api/cron",
       "dest": "/api/cron.py"
-    }
-  ],
-  "crons": [
+    },
     {
-      "path": "/api/cron",
-      "schedule": "0 0 * * *"
+      "src": "/api(.*)",
+      "dest": "/api/index.py"
     }
   ]
 }
