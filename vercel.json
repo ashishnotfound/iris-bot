@@ -1,4 +1,6 @@
 {
+  "buildCommand": "echo build_ok",
+  "outputDirectory": "public",
   "functions": {
     "api/webhook.py": {
       "maxDuration": 60
