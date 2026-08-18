@@ -1,39 +1,4 @@
 {
-  "version": 2,
-  "builds": [
-    {
-      "src": "api/webhook.py",
-      "use": "@vercel/python",
-      "config": {
-        "includeFiles": "lib/**"
-      }
-    },
-    {
-      "src": "api/cron.py",
-      "use": "@vercel/python",
-      "config": {
-        "includeFiles": "lib/**"
-      }
-    },
-    {
-      "src": "public/**",
-      "use": "@vercel/static"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/api/webhook",
-      "dest": "/api/webhook.py"
-    },
-    {
-      "src": "/api/cron",
-      "dest": "/api/cron.py"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/public/$1"
-    }
-  ],
   "crons": [
     {
       "path": "/api/cron",
