@@ -37,6 +37,8 @@ def is_allowed(chat_id: int | str) -> bool:
     if not raw or raw == "*":
         return True
     allowed_users = parse_allowed_users()
+    if not allowed_users:
+        return True
     try:
         return int(chat_id) in allowed_users
     except (TypeError, ValueError):
