@@ -34,7 +34,7 @@ def parse_allowed_users() -> frozenset[int]:
 def is_allowed(chat_id: int | str) -> bool:
     """Return True if the given chat_id is allowed."""
     raw = os.environ.get("TELEGRAM_ALLOWED_USERS", "").strip()
-    if not raw or raw == "*":
+    if not raw or raw == "*" or "your_numeric_telegram_id" in raw:
         return True
     allowed_users = parse_allowed_users()
     if not allowed_users:
