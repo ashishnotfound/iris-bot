@@ -1,9 +1,5 @@
 """
 api/cron.py - Vercel Python Serverless HTTP Entrypoint for Scheduled Cron Trigger
-
-Invoked on a 1-minute schedule by Vercel Cron.
-Validates Authorization: Bearer <CRON_SECRET> header, queries due jobs from Supabase,
-and executes agent turns.
 """
 
 from __future__ import annotations
@@ -15,10 +11,13 @@ import sys
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
-# Ensure workspace root is in sys.path
-root_dir = Path(__file__).resolve().parent.parent
-if str(root_dir) not in sys.path:
-    sys.path.insert(0, str(root_dir))
+# Ensure api directory and workspace root are in sys.path
+api_dir = Path(__file__).resolve().parent
+workspace_dir = api_dir.parent
+
+for p in [str(api_dir), str(workspace_dir)]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 from lib.cron_manager import run_due_jobs
 

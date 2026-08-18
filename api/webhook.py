@@ -1,8 +1,5 @@
 """
 api/webhook.py - Vercel Python Serverless HTTP Entrypoint for Telegram Webhook
-
-Receives Telegram update POST requests, performs secret header validation,
-enforces idempotency via processed_updates table, and executes agent turn.
 """
 
 from __future__ import annotations
@@ -14,10 +11,13 @@ import sys
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
-# Ensure workspace root is in sys.path
-root_dir = Path(__file__).resolve().parent.parent
-if str(root_dir) not in sys.path:
-    sys.path.insert(0, str(root_dir))
+# Ensure api directory and workspace root are in sys.path
+api_dir = Path(__file__).resolve().parent
+workspace_dir = api_dir.parent
+
+for p in [str(api_dir), str(workspace_dir)]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 from lib.auth import is_allowed, validate_webhook_secret
 from lib.hermes_runner import (
