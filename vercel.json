@@ -1,24 +1,5 @@
 {
-  "buildCommand": "echo build_ok",
   "outputDirectory": "public",
-  "functions": {
-    "api/webhook.py": {
-      "maxDuration": 60
-    },
-    "api/cron.py": {
-      "maxDuration": 60
-    }
-  },
-  "rewrites": [
-    {
-      "source": "/api/webhook",
-      "destination": "/api/webhook.py"
-    },
-    {
-      "source": "/api/cron",
-      "destination": "/api/cron.py"
-    }
-  ],
   "crons": [
     {
       "path": "/api/cron",
