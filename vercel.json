@@ -1,28 +1,17 @@
 {
-  "builds": [
-    {
-      "src": "api/webhook.py",
-      "use": "@vercel/python",
-      "config": {
-        "includeFiles": ["api/lib/**", "api/requirements.txt"]
-      }
-    },
-    {
-      "src": "api/cron.py",
-      "use": "@vercel/python",
-      "config": {
-        "includeFiles": ["api/lib/**", "api/requirements.txt"]
-      }
+  "functions": {
+    "api/*.py": {
+      "maxDuration": 60
     }
-  ],
-  "routes": [
+  },
+  "rewrites": [
     {
-      "src": "/api/webhook",
-      "dest": "/api/webhook.py"
+      "source": "/api/webhook",
+      "destination": "/api/webhook.py"
     },
     {
-      "src": "/api/cron",
-      "dest": "/api/cron.py"
+      "source": "/api/cron",
+      "destination": "/api/cron.py"
     }
   ],
   "crons": [
