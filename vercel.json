@@ -1,4 +1,20 @@
 {
+  "functions": {
+    "api/*.py": {
+      "runtime": "python3.11",
+      "maxDuration": 60
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/webhook",
+      "destination": "/api/webhook.py"
+    },
+    {
+      "source": "/api/cron",
+      "destination": "/api/cron.py"
+    }
+  ],
   "crons": [
     {
       "path": "/api/cron",
