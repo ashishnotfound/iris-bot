@@ -1,5 +1,24 @@
 {
-  "outputDirectory": "public",
+  "builds": [
+    {
+      "src": "api/webhook.py",
+      "use": "@vercel/python"
+    },
+    {
+      "src": "api/cron.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/webhook",
+      "dest": "api/webhook.py"
+    },
+    {
+      "src": "/api/cron",
+      "dest": "api/cron.py"
+    }
+  ],
   "crons": [
     {
       "path": "/api/cron",
