@@ -1093,10 +1093,15 @@ def _execute_agent_turn_inner(
                         fn_args = pending["args"]
 
                 logger.info("Executing tool call: %s with args: %s", fn_name, fn_args)
-
                 telegram_client.send_chat_action(chat_id, "typing")
-
-                tool_result = composio.execute_tool(fn_name, fn_args)
+                try:
+                    tool_result = composio.execute_tool(fn_name, fn_args)
+                except Exception as tool_err:
+                    logger.error("Composio tool execution exception for %s: %s", fn_name, tool_err)
+                    tool_result = {
+                        "successful": False,
+                        "error": f"Failed to execute tool {fn_name}: {tool_err}",
+                    }
 
             logger.info("Tool execution result for %s: %s", fn_name, tool_result)
 

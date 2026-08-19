@@ -179,6 +179,25 @@ class TestComposioAudit(unittest.TestCase):
                 mock_exec.assert_called_with("composio_googlecalendar_events_list", {})
                 self.assertIn("Team Sync", tg.sent[-1][1])
 
+    def test_06_tool_exception_does_not_silence_telegram_reply(self):
+        """Verify tool execution exception is caught safely and Iris always delivers Telegram reply."""
+        tg = MockTelegramClient()
+
+        mock_tool_call = MagicMock()
+        mock_tool_call.id = "tc_err_1"
+        mock_tool_call.function.name = "composio_instagram_get_user_info"
+        mock_tool_call.function.arguments = "{}"
+
+        step1_res = ("", [mock_tool_call], "g", "m")
+        step2_res = ("I encountered an issue fetching your Instagram info, but I am still active.", None, "g", "m")
+
+        with patch.object(hr._registry, "chat_completion", side_effect=[step1_res, step2_res]):
+            with patch.object(ComposioClient, "execute_tool", side_effect=RuntimeError("Composio API Timeout")):
+                res = hr.execute_agent_turn(chat_id=888, user_message="check my insta", telegram_client=tg)
+
+        self.assertEqual(len(tg.sent), 1)
+        self.assertTrue(len(tg.sent[0][1]) > 0)
+
 
 if __name__ == "__main__":
     unittest.main()
