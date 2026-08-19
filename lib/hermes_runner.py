@@ -578,65 +578,56 @@ _biz = BusinessSnapshotManager()
 
 _web = WebSearchClient()
 
+_PROCESSED_UPDATES_CACHE: set = set()
+
 def _is_update_processed(update_id: int) -> bool:
-
-    """Check if a Telegram update_id was already processed in Supabase."""
-
-    import requests
+    """Check if a Telegram update_id was already processed (in memory or Supabase)."""
+    if not update_id:
+        return False
+    if update_id in _PROCESSED_UPDATES_CACHE:
+        return True
 
     base = _supabase_url()
-
-    if not base or not update_id:
-
+    if not base:
         return False
 
     try:
-
+        import requests
         r = requests.get(
-
             f"{base}/rest/v1/processed_updates",
-
             headers=_supabase_headers(),
-
             params={"update_id": f"eq.{update_id}", "select": "update_id"},
-
-            timeout=4,
-
+            timeout=3,
         )
-
-        return r.status_code == 200 and bool(r.json())
-
+        if r.status_code == 200 and bool(r.json()):
+            _PROCESSED_UPDATES_CACHE.add(update_id)
+            return True
     except Exception:
+        pass
 
-        return False
+    return False
 
 def _mark_update_processed(update_id: int, chat_id: int) -> bool:
-
-    """Mark a Telegram update_id as processed in Supabase."""
-
-    import requests
+    """Mark a Telegram update_id as processed in memory and Supabase."""
+    if not update_id:
+        return False
+    _PROCESSED_UPDATES_CACHE.add(update_id)
 
     base = _supabase_url()
-
-    if not base or not update_id:
-
-        return False
+    if not base:
+        return True
 
     try:
-
+        import requests
         r = requests.post(
-
             f"{base}/rest/v1/processed_updates",
-
             headers=_supabase_headers(),
-
             json={"update_id": update_id, "chat_id": chat_id},
-
-            timeout=4,
-
+            timeout=3,
         )
-
         return r.status_code in (200, 201)
+    except Exception:
+        return True
 
     except Exception:
 

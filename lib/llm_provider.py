@@ -142,13 +142,14 @@ class _KeyRingMixin:
         now = time.time()
         return [k for k in keys if now >= self._exhausted_until.get(k, 0)]
 
-    def _mark_exhausted(self, key: str, ttl: int = KEY_EXHAUSTED_TTL) -> None:
-        self._exhausted_until[key] = time.time() + ttl
+    def _mark_exhausted(self, key: str, ttl: Optional[int] = None) -> None:
+        actual_ttl = ttl if ttl is not None else 60
+        self._exhausted_until[key] = time.time() + actual_ttl
         logger.warning(
             "%s key ...%s exhausted; backing off for %ds",
             self.__class__.__name__,
             key[-6:],
-            ttl,
+            actual_ttl,
         )
 
     def _pick_key(self, keys: List[str]) -> Optional[str]:

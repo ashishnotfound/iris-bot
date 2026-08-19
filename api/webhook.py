@@ -77,6 +77,10 @@ class handler(BaseHTTPRequestHandler):
             self._send_json(200, {"status": "skipped", "reason": "already_processed"})
             return
 
+        # Mark in-progress IMMEDIATELY before starting turn to block concurrent Telegram retries
+        if update_id:
+            _mark_update_processed(update_id, chat_id)
+
         # Send HTTP 200 OK immediately to Telegram so Telegram never times out (5s limit)
         self._send_json(200, {"status": "processing", "update_id": update_id})
 
@@ -87,8 +91,6 @@ class handler(BaseHTTPRequestHandler):
                 photo=photo,
                 voice=voice,
             )
-            if update_id and result.get("status") in ("success", "cancelled", "expired", "error"):
-                _mark_update_processed(update_id, chat_id)
         except Exception as e:
             logger.error("Webhook processing failed for update_id=%s: %s", update_id, e, exc_info=True)
 
