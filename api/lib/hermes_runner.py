@@ -657,6 +657,37 @@ def _mark_update_processed(update_id: int, chat_id: int) -> bool:
         return False
 
 def execute_agent_turn(
+    chat_id: int,
+    user_message: str = "",
+    *,
+    photo: Optional[List[Dict[str, Any]]] = None,
+    voice: Optional[Dict[str, Any]] = None,
+    supabase_client=None,
+    telegram_client: Optional[TelegramClient] = None,
+) -> Dict[str, Any]:
+    """Execute a single turn of Iris Agent with top-level error handling."""
+    if not telegram_client:
+        telegram_client = TelegramClient()
+
+    try:
+        return _execute_agent_turn_inner(
+            chat_id=chat_id,
+            user_message=user_message,
+            photo=photo,
+            voice=voice,
+            supabase_client=supabase_client,
+            telegram_client=telegram_client,
+        )
+    except Exception as turn_err:
+        logger.error("Unhandled exception in execute_agent_turn for chat_id=%s: %s", chat_id, turn_err, exc_info=True)
+        fallback = "⚠️ Iris encountered an internal error processing your request. Please try again in a moment."
+        try:
+            telegram_client.send_message(chat_id, fallback)
+        except Exception as tg_err:
+            logger.error("Failed to send fallback error message to Telegram: %s", tg_err)
+        return {"status": "error", "error": str(turn_err)}
+
+def _execute_agent_turn_inner(
 
     chat_id: int,
 
@@ -1246,6 +1277,8 @@ def execute_agent_turn(
         "tier": str(decision.tier),
 
     }
+
+
 
 # ---------------------------------------------------------------------------
 

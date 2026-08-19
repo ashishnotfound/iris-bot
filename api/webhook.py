@@ -69,9 +69,6 @@ class handler(BaseHTTPRequestHandler):
             self._send_json(200, {"status": "skipped", "reason": "already_processed"})
             return
 
-        if update_id:
-            _mark_update_processed(update_id, chat_id)
-
         try:
             result = execute_agent_turn(
                 chat_id=chat_id,
@@ -79,6 +76,8 @@ class handler(BaseHTTPRequestHandler):
                 photo=photo,
                 voice=voice,
             )
+            if update_id and result.get("status") in ("success", "cancelled", "expired", "error"):
+                _mark_update_processed(update_id, chat_id)
             self._send_json(200, result)
         except Exception as e:
             logger.error("Webhook processing failed: %s", e, exc_info=True)

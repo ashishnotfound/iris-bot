@@ -27,7 +27,7 @@ def parse_allowed_users() -> frozenset[int]:
     ids: list[int] = []
     for part in re.split(r"[,\s]+", cleaned):
         part = part.strip()
-        if part.isdigit():
+        if part.lstrip("-").isdigit():
             ids.append(int(part))
     return frozenset(ids)
 

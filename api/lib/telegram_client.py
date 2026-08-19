@@ -83,17 +83,21 @@ class TelegramClient:
         try:
             r = requests.post(url, json=payload, timeout=15)
             data = r.json()
-            if not data.get("ok") and parse_mode:
-                # Markdown rendering failed — retry with plain text
-                logger.warning(
-                    "Telegram Markdown send failed (chat_id=%s): %s — retrying as plain text",
+            if not data.get("ok"):
+                logger.error(
+                    "Telegram sendMessage failed (chat_id=%s): %s",
                     chat_id,
-                    data.get("description", ""),
+                    data.get("description", str(data)),
                 )
-                plain_text = _strip_markdown(text)
-                plain_payload = {"chat_id": chat_id, "text": plain_text}
-                r2 = requests.post(url, json=plain_payload, timeout=15)
-                return r2.json()
+                if parse_mode:
+                    # Markdown rendering failed — retry with plain text
+                    plain_text = _strip_markdown(text)
+                    plain_payload = {"chat_id": chat_id, "text": plain_text}
+                    r2 = requests.post(url, json=plain_payload, timeout=15)
+                    data2 = r2.json()
+                    if not data2.get("ok"):
+                        logger.error("Telegram plain text retry failed (chat_id=%s): %s", chat_id, data2.get("description", str(data2)))
+                    return data2
             return data
         except Exception as e:
             logger.error("Telegram sendMessage error: %s", e)
