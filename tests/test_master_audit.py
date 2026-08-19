@@ -74,6 +74,8 @@ class TestMasterAudit(unittest.TestCase):
         prompt = self.memory.build_system_prompt("", "")
         self.assertIn("You are Iris, Reyo's personal AI agent", prompt)
         self.assertIn("WHO REYO IS", prompt)
+        self.assertIn("My name is Iris", prompt)
+        self.assertIn("CONVERSATIONAL RESPONSES & GREETINGS", prompt)
         self.assertIn("ACTIONS VS WORDS", prompt)
         self.assertIn("TOOL RESULTS ARE AUTHORITATIVE", prompt)
         self.assertIn("REAL-TIME INFORMATION", prompt)

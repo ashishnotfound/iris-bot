@@ -1236,7 +1236,9 @@ def _execute_agent_turn_inner(
 
     if not reply or not str(reply).strip():
 
-        reply = "I've processed your request."
+        logger.warning("LLM returned empty reply for chat_id=%s; using default fallback response", chat_id)
+
+        reply = "I'm here! How can I help you today?"
 
     telegram_client.send_message(chat_id, reply)
 

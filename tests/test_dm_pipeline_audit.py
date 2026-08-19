@@ -152,18 +152,36 @@ class TestDMPipelineAudit(unittest.TestCase):
         self.assertEqual(len(tg.sent), 1)
         self.assertIn("temporarily unable to process this request", tg.sent[0][1])
 
-    def test_07_telegram_send_failure_is_detected_and_handled(self):
-        tg_failing = MockTelegramClient(fail_api=True)
-        mock_res = ("Test reply", None, "openrouter", "model")
+    def test_08_identity_queries_distinguish_iris_from_reyo(self):
+        """Test full pipeline prompt payload for bot name vs user name queries."""
+        tg = MockTelegramClient()
 
-        with patch.object(hr._registry, "chat_completion", return_value=mock_res):
+        # 1. Ask for bot's name
+        mock_bot_name = ("My name is Iris, your personal AI agent.", None, "gemini", "gemini-2.5-flash")
+        with patch.object(hr._registry, "chat_completion", return_value=mock_bot_name) as mock_cc:
             res = hr.execute_agent_turn(
                 chat_id=123456,
-                user_message="Hello",
-                telegram_client=tg_failing,
+                user_message="what's your name?",
+                telegram_client=tg,
             )
+            # Inspect system prompt payload sent to main chat LLM (first call before memory extraction)
+            sent_messages = mock_cc.call_args_list[0][0][0]
+            sys_prompt = sent_messages[0]["content"]
+            self.assertIn("My name is Iris", sys_prompt)
+            self.assertIn("NEVER answer \"Your name is Reyo\" when asked for YOUR name.", sys_prompt)
+            self.assertEqual(res.get("status"), "success")
+            self.assertIn("Iris", tg.sent[-1][1])
 
-        self.assertEqual(res.get("status"), "success")
+        # 2. Ask for user's name
+        mock_user_name = ("Your name is Reyo.", None, "gemini", "gemini-2.5-flash")
+        with patch.object(hr._registry, "chat_completion", return_value=mock_user_name):
+            res = hr.execute_agent_turn(
+                chat_id=123456,
+                user_message="what's my name?",
+                telegram_client=tg,
+            )
+            self.assertEqual(res.get("status"), "success")
+            self.assertIn("Reyo", tg.sent[-1][1])
 
 
 if __name__ == "__main__":

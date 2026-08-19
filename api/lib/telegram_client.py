@@ -70,7 +70,7 @@ class TelegramClient:
 
         text = str(text or "").strip()
         if not text:
-            text = "I've processed your request."
+            text = "I'm here! How can I help you today?"
 
         # Truncate if necessary
         if len(text) > _MAX_MESSAGE_LEN:
