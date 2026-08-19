@@ -38,11 +38,11 @@ class MockProvider(LLMProvider):
     def is_available(self) -> bool:
         return True
 
-    def chat_completion(self, messages, *, model=None, temperature=0.7, max_tokens=4096, vision=False):
+    def chat_completion(self, messages, *, model=None, temperature=0.7, max_tokens=4096, vision=False, tools=None):
         self.call_count += 1
         if not self.should_succeed:
             raise LLMKeyExhaustedError(f"Mock {self._name} failure")
-        return f"Response from {self._name}"
+        return f"Response from {self._name}", None
 
 
 class TestRoutingMatrix(unittest.TestCase):
@@ -75,7 +75,7 @@ class TestRoutingMatrix(unittest.TestCase):
         reg._providers = [p_openrouter, p_nvidia, p_groq, p_gemini]
 
         decision = self.router.route("test")
-        reply, prov_used, model_used = reg.chat_completion([], candidates=decision.candidates)
+        reply, tool_calls, prov_used, model_used = reg.chat_completion([], candidates=decision.candidates)
 
         self.assertEqual(prov_used, "openrouter")
         self.assertEqual(p_openrouter.call_count, 1)
@@ -92,7 +92,7 @@ class TestRoutingMatrix(unittest.TestCase):
         reg._providers = [p_openrouter, p_nvidia, p_groq, p_gemini]
 
         decision = self.router.route("test")
-        reply, prov_used, model_used = reg.chat_completion([], candidates=decision.candidates)
+        reply, tool_calls, prov_used, model_used = reg.chat_completion([], candidates=decision.candidates)
 
         self.assertEqual(prov_used, "nvidia")
         self.assertGreaterEqual(p_openrouter.call_count, 1)
@@ -109,7 +109,7 @@ class TestRoutingMatrix(unittest.TestCase):
         reg._providers = [p_openrouter, p_nvidia, p_groq, p_gemini]
 
         decision = self.router.route("test")
-        reply, prov_used, model_used = reg.chat_completion([], candidates=decision.candidates)
+        reply, tool_calls, prov_used, model_used = reg.chat_completion([], candidates=decision.candidates)
 
         self.assertEqual(prov_used, "groq")
         self.assertGreaterEqual(p_openrouter.call_count, 1)
@@ -126,7 +126,7 @@ class TestRoutingMatrix(unittest.TestCase):
         reg._providers = [p_openrouter, p_nvidia, p_groq, p_gemini]
 
         decision = self.router.route("test")
-        reply, prov_used, model_used = reg.chat_completion([], candidates=decision.candidates)
+        reply, tool_calls, prov_used, model_used = reg.chat_completion([], candidates=decision.candidates)
 
         self.assertEqual(prov_used, "gemini")
         self.assertGreaterEqual(p_openrouter.call_count, 1)

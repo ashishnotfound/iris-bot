@@ -95,7 +95,8 @@ class LLMProvider(ABC):
         temperature: float = 0.7,
         max_tokens: int = 4096,
         vision: bool = False,
-    ) -> str: ...
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Tuple[str, Any]: ...
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +238,8 @@ class GeminiProvider(LLMProvider, _KeyRingMixin):
         temperature: float = 0.7,
         max_tokens: int = 4096,
         vision: bool = False,
-    ) -> str:
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Tuple[str, Any]:
         self._keys = self._load_keys()
         active = self._active_keys(self._keys)
         if not active:
@@ -254,13 +256,17 @@ class GeminiProvider(LLMProvider, _KeyRingMixin):
         for key in list(active):
             try:
                 client = OpenAI(base_url=GEMINI_BASE_URL, api_key=key)
-                resp = client.chat.completions.create(
-                    model=use_model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                )
-                return resp.choices[0].message.content or ""
+                kwargs = {
+                    "model": use_model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                }
+                if tools:
+                    kwargs["tools"] = tools
+                resp = client.chat.completions.create(**kwargs)
+                choice_msg = resp.choices[0].message
+                return (choice_msg.content or "", getattr(choice_msg, "tool_calls", None))
             except Exception as e:
                 if self._is_key_or_quota_error(e):
                     self._mark_exhausted(key)
@@ -313,7 +319,8 @@ class OpenRouterProvider(LLMProvider, _KeyRingMixin):
         temperature: float = 0.7,
         max_tokens: int = 4096,
         vision: bool = False,
-    ) -> str:
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Tuple[str, Any]:
         self._keys = self._load_keys()
         active = self._active_keys(self._keys)
         if not active:
@@ -337,13 +344,17 @@ class OpenRouterProvider(LLMProvider, _KeyRingMixin):
                         "X-Title": "Iris Agent",
                     },
                 )
-                resp = client.chat.completions.create(
-                    model=use_model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                )
-                return resp.choices[0].message.content or ""
+                kwargs = {
+                    "model": use_model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                }
+                if tools:
+                    kwargs["tools"] = tools
+                resp = client.chat.completions.create(**kwargs)
+                choice_msg = resp.choices[0].message
+                return (choice_msg.content or "", getattr(choice_msg, "tool_calls", None))
             except Exception as e:
                 if self._is_key_or_quota_error(e):
                     self._mark_exhausted(key)
@@ -426,7 +437,8 @@ class NvidiaProvider(LLMProvider, _KeyRingMixin):
         temperature: float = 0.7,
         max_tokens: int = 4096,
         vision: bool = False,
-    ) -> str:
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Tuple[str, Any]:
         self._keys = self._load_keys()
         active = self._active_keys(self._keys)
         if not active:
@@ -443,13 +455,17 @@ class NvidiaProvider(LLMProvider, _KeyRingMixin):
         for key in list(active):
             try:
                 client = OpenAI(base_url=NVIDIA_BASE_URL, api_key=key)
-                resp = client.chat.completions.create(
-                    model=use_model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                )
-                return resp.choices[0].message.content or ""
+                kwargs = {
+                    "model": use_model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                }
+                if tools:
+                    kwargs["tools"] = tools
+                resp = client.chat.completions.create(**kwargs)
+                choice_msg = resp.choices[0].message
+                return (choice_msg.content or "", getattr(choice_msg, "tool_calls", None))
             except Exception as e:
                 if self._is_key_or_quota_error(e):
                     self._mark_exhausted(key)
@@ -508,7 +524,8 @@ class GroqProvider(LLMProvider, _KeyRingMixin):
         temperature: float = 0.7,
         max_tokens: int = 4096,
         vision: bool = False,
-    ) -> str:
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Tuple[str, Any]:
         self._keys = self._load_keys()
         active = self._active_keys(self._keys)
         if not active:
@@ -525,13 +542,17 @@ class GroqProvider(LLMProvider, _KeyRingMixin):
         for key in list(active):
             try:
                 client = OpenAI(base_url=GROQ_BASE_URL, api_key=key)
-                resp = client.chat.completions.create(
-                    model=use_model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                )
-                return resp.choices[0].message.content or ""
+                kwargs = {
+                    "model": use_model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                }
+                if tools:
+                    kwargs["tools"] = tools
+                resp = client.chat.completions.create(**kwargs)
+                choice_msg = resp.choices[0].message
+                return (choice_msg.content or "", getattr(choice_msg, "tool_calls", None))
             except Exception as e:
                 if self._is_key_or_quota_error(e):
                     self._mark_exhausted(key)
@@ -576,7 +597,8 @@ class ProviderRegistry:
         temperature: float = 0.7,
         max_tokens: int = 4096,
         vision: bool = False,
-    ) -> Tuple[str, str, str]:
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Tuple[str, Any, str, str]:
         """Execute a chat completion with candidate-aware provider failover.
 
         Args:
@@ -606,15 +628,16 @@ class ProviderRegistry:
                     errors.append(f"{prov_name}/{model_id}: provider unconfigured or unavailable")
                     continue
                 try:
-                    text = p.chat_completion(
+                    text, tool_calls = p.chat_completion(
                         messages,
                         model=model_id,
                         temperature=temperature,
                         max_tokens=max_tokens,
                         vision=vision,
+                        tools=tools,
                     )
-                    logger.info("LLM success: provider=%s model=%s", prov_name, model_id)
-                    return text, prov_name, model_id
+                    logger.info("LLM success: provider=%s model=%s tool_calls=%s", prov_name, model_id, bool(tool_calls))
+                    return text, tool_calls, prov_name, model_id
                 except LLMKeyExhaustedError as e:
                     errors.append(f"{prov_name}/{model_id}: key exhausted — {e}")
                     continue
@@ -640,18 +663,19 @@ class ProviderRegistry:
                 continue
             use_model = model
             try:
-                text = p.chat_completion(
+                text, tool_calls = p.chat_completion(
                     messages,
                     model=use_model,
                     temperature=temperature,
                     max_tokens=max_tokens,
                     vision=vision,
+                    tools=tools,
                 )
                 used_model = use_model or (
                     VISION_MODELS.get(p.name, "") if vision else DEFAULT_MODELS.get(p.name, "")
                 )
-                logger.info("LLM response from provider=%s model=%s", p.name, used_model)
-                return text, p.name, used_model
+                logger.info("LLM response from provider=%s model=%s tool_calls=%s", p.name, used_model, bool(tool_calls))
+                return text, tool_calls, p.name, used_model
             except LLMKeyExhaustedError as e:
                 errors.append(f"{p.name}: key exhausted — {e}")
                 continue

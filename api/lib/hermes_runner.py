@@ -62,6 +62,17 @@ from lib.telegram_client import TelegramClient
 
 from lib.web_search import WebSearchClient
 
+_PENDING_ACTION_CONFIRMATIONS: Dict[int, Dict[str, Any]] = {}
+
+CONFIRMATION_AFFIRMATIVE_RE = re.compile(
+    r"\b(yes|yeah|yep|confirm|confirmed|send it|do it|proceed|go ahead|ok|okay|sure)\b",
+    re.IGNORECASE,
+)
+CONFIRMATION_NEGATIVE_RE = re.compile(
+    r"\b(no|nop|nope|cancel|stop|dont|don't|abort|nevermind)\b",
+    re.IGNORECASE,
+)
+
 logger = logging.getLogger(__name__)
 
 # Telemetry store per chat
@@ -418,18 +429,23 @@ def _download_voice(tg: TelegramClient, voice: Dict[str, Any]) -> Optional[bytes
 
     return tg.download_file(file_path)
 
+def _detect_image_mime(b: bytes) -> str:
+    """Detect image MIME type from raw magic bytes."""
+    if b.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    elif b.startswith(b"RIFF") and len(b) > 12 and b[8:12] == b"WEBP":
+        return "image/webp"
+    elif b.startswith(b"GIF8"):
+        return "image/gif"
+    return "image/jpeg"
+
 def _photo_to_content_part(photo_bytes: bytes) -> Dict[str, Any]:
-
-    """Convert raw JPEG bytes to an OpenAI vision content part."""
-
+    """Convert raw photo bytes to an OpenAI vision content part with MIME detection."""
+    mime = _detect_image_mime(photo_bytes)
     b64 = base64.b64encode(photo_bytes).decode("utf-8")
-
     return {
-
         "type": "image_url",
-
-        "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
-
+        "image_url": {"url": f"data:{mime};base64,{b64}"},
     }
 
 # ---------------------------------------------------------------------------
@@ -684,6 +700,29 @@ def execute_agent_turn(
 
         return cmd_result
 
+    # ── Application-Level Confirmation Gate Check ──
+    import time, uuid
+    is_user_confirmed = False
+    now_ts = time.time()
+
+    if chat_id in _PENDING_ACTION_CONFIRMATIONS:
+        pending = _PENDING_ACTION_CONFIRMATIONS[chat_id]
+        if now_ts > pending.get("expires_at", 0):
+            _PENDING_ACTION_CONFIRMATIONS.pop(chat_id, None)
+            logger.info("Pending action %s for chat_id=%s expired.", pending.get("action_id"), chat_id)
+            if CONFIRMATION_AFFIRMATIVE_RE.search(clean):
+                telegram_client.send_message(
+                    chat_id,
+                    "⚠️ That pending action has expired (10-minute limit). Please request the action again."
+                )
+                return {"status": "expired"}
+        elif CONFIRMATION_NEGATIVE_RE.search(clean):
+            _PENDING_ACTION_CONFIRMATIONS.pop(chat_id, None)
+            telegram_client.send_message(chat_id, "Action cancelled. No external changes were made.")
+            return {"status": "cancelled"}
+        elif CONFIRMATION_AFFIRMATIVE_RE.search(clean):
+            is_user_confirmed = True
+
     # 3. Voice message → STT → text
 
     voice_transcript: Optional[str] = None
@@ -780,15 +819,23 @@ def execute_agent_turn(
 
         telegram_client.send_chat_action(chat_id, "typing")
 
-        photo_bytes = _download_photo(telegram_client, photo)
+        try:
+
+            photo_bytes = _download_photo(telegram_client, photo)
+
+        except Exception as dl_err:
+
+            logger.error("Photo download exception for chat_id=%s: %s", chat_id, dl_err)
+
+            photo_bytes = None
 
         if photo_bytes:
 
             is_vision = True
 
-            user_content: Any = [
+            user_content = [
 
-                {"type": "text", "text": clean or "Describe this image in detail."},
+                {"type": "text", "text": clean if clean else "Describe this image in detail."},
 
                 _photo_to_content_part(photo_bytes),
 
@@ -796,7 +843,17 @@ def execute_agent_turn(
 
         else:
 
-            user_content = clean or "Please describe the image (download failed)."
+            logger.warning("Photo download returned no bytes for chat_id=%s", chat_id)
+
+            telegram_client.send_message(
+
+                chat_id,
+
+                "⚠️ I detected your image, but was unable to download it from Telegram right now. Please try sending it again."
+
+            )
+
+            return {"status": "error", "error": "photo download failed"}
 
     else:
 
@@ -838,11 +895,21 @@ def execute_agent_turn(
 
             )
 
-    # 9. Dynamic Task Routing
+    # 9. Dynamic Task Routing & Composio Tool Discovery
 
     composio = ComposioClient()
 
     has_tools = composio.is_configured() and bool(composio.get_connected_accounts())
+
+    tool_schemas = []
+
+    if has_tools:
+
+        tool_schemas = composio.get_tool_schemas_for_request(clean)
+
+        if tool_schemas:
+
+            logger.info("Exposing %d Composio tool schemas to LLM for request: %s", len(tool_schemas), clean[:50])
 
     session_model_override = _get_session_model(chat_id)
 
@@ -854,7 +921,7 @@ def execute_agent_turn(
 
         has_photo=is_vision,
 
-        tools_available=has_tools,
+        tools_available=has_tools and bool(tool_schemas),
 
         manual_model_override=session_model_override,
 
@@ -862,35 +929,209 @@ def execute_agent_turn(
 
     )
 
-    # 10. LLM call with dynamic candidate failover
+    # 10. Agent Tool Execution Loop (up to 5 tool iterations)
 
-    try:
+    max_tool_iterations = 5
 
-        reply, provider_used, model_used = _registry.chat_completion(
+    iteration = 0
 
-            messages,
+    reply = ""
 
-            candidates=decision.candidates,
+    provider_used = "unknown"
 
-            vision=is_vision,
+    model_used = "unknown"
 
-        )
+    while iteration < max_tool_iterations:
 
-    except (RuntimeError, Exception) as e:
+        iteration += 1
 
-        logger.error("All AI providers failed for chat_id=%s: %s", chat_id, e)
+        try:
 
-        clean_user_msg = (
+            content, tool_calls, prov, model = _registry.chat_completion(
 
-            "⚠️ Iris is temporarily unable to process this request because the AI service is unavailable. "
+                messages,
 
-            "Please try again in a moment."
+                candidates=decision.candidates,
 
-        )
+                vision=is_vision,
 
-        telegram_client.send_message(chat_id, clean_user_msg)
+                tools=tool_schemas if tool_schemas else None,
 
-        return {"status": "error", "error": "AI service unavailable"}
+            )
+
+            provider_used, model_used = prov, model
+
+        except (RuntimeError, Exception) as e:
+
+            logger.error("All AI providers failed for chat_id=%s: %s", chat_id, e)
+
+            clean_user_msg = (
+
+                "⚠️ Iris is temporarily unable to process this request because the AI service is unavailable. "
+
+                "Please try again in a moment."
+
+            )
+
+            telegram_client.send_message(chat_id, clean_user_msg)
+
+            return {"status": "error", "error": "AI service unavailable"}
+
+        if not tool_calls:
+
+            reply = content
+
+            break
+
+        assistant_tool_msg = {"role": "assistant", "content": content or None, "tool_calls": []}
+
+        for tc in tool_calls:
+
+            assistant_tool_msg["tool_calls"].append({
+
+                "id": tc.id,
+
+                "type": "function",
+
+                "function": {
+
+                    "name": tc.function.name,
+
+                    "arguments": tc.function.arguments,
+
+                }
+
+            })
+
+        messages.append(assistant_tool_msg)
+
+        for tc in tool_calls:
+
+            fn_name = tc.function.name
+
+            try:
+
+                fn_args = json.loads(tc.function.arguments or "{}")
+
+            except Exception:
+
+                fn_args = {}
+
+            from lib.composio_client import is_consequential_action
+
+            if is_consequential_action(fn_name) and not is_user_confirmed:
+
+                action_id = str(uuid.uuid4())
+
+                expires_at = now_ts + 600.0
+
+                summary_parts = [f"Tool: {fn_name}"]
+
+                for k, v in fn_args.items():
+
+                    summary_parts.append(f"{k}: {v}")
+
+                action_summary = "\n".join(summary_parts)
+
+                logger.info("INTERCEPTED consequential tool call (action_id=%s): %s", action_id, fn_name)
+
+                _PENDING_ACTION_CONFIRMATIONS[chat_id] = {
+
+                    "action_id": action_id,
+
+                    "user_id": str(chat_id),
+
+                    "chat_id": chat_id,
+
+                    "tool_name": fn_name,
+
+                    "args": fn_args,
+
+                    "action_summary": action_summary,
+
+                    "created_at": now_ts,
+
+                    "expires_at": expires_at,
+
+                    "status": "PENDING_CONFIRMATION",
+
+                }
+
+                tool_result = {
+
+                    "successful": False,
+
+                    "requires_confirmation": True,
+
+                    "action_id": action_id,
+
+                    "error": (
+
+                        f"Confirmation required. Present details of '{fn_name}' and its parameters ({json.dumps(fn_args)}) "
+
+                        f"to the user and ask them to explicitly reply with 'yes' or 'confirm' before proceeding."
+
+                    ),
+
+                }
+
+            else:
+
+                if is_user_confirmed and chat_id in _PENDING_ACTION_CONFIRMATIONS:
+
+                    pending = _PENDING_ACTION_CONFIRMATIONS.pop(chat_id, None)
+
+                    if pending:
+
+                        fn_name = pending["tool_name"]
+
+                        fn_args = pending["args"]
+
+                logger.info("Executing tool call: %s with args: %s", fn_name, fn_args)
+
+                telegram_client.send_chat_action(chat_id, "typing")
+
+                tool_result = composio.execute_tool(fn_name, fn_args)
+
+            logger.info("Tool execution result for %s: %s", fn_name, tool_result)
+
+            from lib.job_runner import make_dedup_key, record_action
+
+            dedup_k = make_dedup_key(str(chat_id), fn_name)
+
+            is_ok = bool(tool_result.get("successful", True))
+
+            record_action(
+
+                dedup_k,
+
+                chat_id=chat_id,
+
+                job_id=None,
+
+                action_type=fn_name,
+
+                status="success" if is_ok else "failed",
+
+                request_data=fn_args,
+
+                response_data=tool_result,
+
+                error=tool_result.get("error") if not is_ok else None,
+
+            )
+
+            messages.append({
+
+                "role": "tool",
+
+                "tool_call_id": tc.id,
+
+                "name": fn_name,
+
+                "content": json.dumps(tool_result),
+
+            })
 
     # 11. Mid-Task Escalation Check
 
@@ -908,7 +1149,7 @@ def execute_agent_turn(
 
             try:
 
-                esc_reply, esc_prov, esc_model = _registry.chat_completion(
+                esc_reply, esc_tc, esc_prov, esc_model = _registry.chat_completion(
 
                     messages,
 
@@ -962,7 +1203,7 @@ def execute_agent_turn(
 
         def _llm_for_memory(prompt: str) -> str:
 
-            text, _, _ = _registry.chat_completion(
+            text, _, _, _ = _registry.chat_completion(
 
                 [{"role": "user", "content": prompt}],
 
@@ -1573,7 +1814,7 @@ def handle_phase2_command(cmd: str, parts, chat_id: int, tg) -> Optional[Dict[st
 
             def _llm_for_parser(prompt: str) -> str:
 
-                text, _, _ = _registry.chat_completion(
+                text, _, _, _ = _registry.chat_completion(
 
                     [{"role": "user", "content": prompt}], max_tokens=512,
 
