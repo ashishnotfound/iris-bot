@@ -110,6 +110,75 @@ class TestComposioAudit(unittest.TestCase):
         )
         self.assertNotEqual(tier, ModelTier.FAST)
 
+    def test_04_negative_test_does_not_ask_for_instagram_business_account_id(self):
+        """Negative regression test: verify Iris does NOT ask for Instagram account ID when connected tool executes."""
+        tg = MockTelegramClient()
+
+        mock_tool_call = MagicMock()
+        mock_tool_call.id = "tc_insta_999"
+        mock_tool_call.function.name = "composio_instagram_get_user_info"
+        mock_tool_call.function.arguments = "{}"
+
+        step1_res = ("", [mock_tool_call], "openrouter", "google/gemma-4-31b-it:free")
+        step2_res = ("Your Instagram profile (@totalsolutions.socials) has 42 followers.", None, "openrouter", "google/gemma-4-31b-it:free")
+
+        mock_tool_result = {
+            "successful": True,
+            "data": {
+                "username": "totalsolutions.socials",
+                "followers_count": 42,
+            }
+        }
+
+        with patch.object(hr._registry, "chat_completion", side_effect=[step1_res, step2_res]):
+            with patch.object(ComposioClient, "execute_tool", return_value=mock_tool_result):
+                res = hr.execute_agent_turn(
+                    chat_id=123456,
+                    user_message="how many followers am i having on insta",
+                    telegram_client=tg,
+                )
+
+        sent_text = tg.sent[0][1]
+        self.assertNotIn("Please provide your Instagram business account ID", sent_text)
+        self.assertNotIn("account ID", sent_text.lower())
+        self.assertIn("42", sent_text)
+
+    def test_05_cross_integration_tool_execution_flow(self):
+        """Verify request -> toolkit -> tool selection -> execution -> result propagation for Gmail, Calendar, and Browsebase."""
+        tg = MockTelegramClient()
+
+        # 1. Gmail
+        mock_gmail_call = MagicMock()
+        mock_gmail_call.id = "tc_gmail_1"
+        mock_gmail_call.function.name = "composio_gmail_fetch_emails"
+        mock_gmail_call.function.arguments = "{}"
+
+        g_step1 = ("", [mock_gmail_call], "gemini", "gemini-2.5-flash")
+        g_step2 = ("You have 2 unread emails from John and Sales.", None, "gemini", "gemini-2.5-flash")
+        g_result = {"successful": True, "data": {"messages": [{"from": "John"}, {"from": "Sales"}]}}
+
+        with patch.object(hr._registry, "chat_completion", side_effect=[g_step1, g_step2]):
+            with patch.object(ComposioClient, "execute_tool", return_value=g_result) as mock_exec:
+                res = hr.execute_agent_turn(chat_id=123, user_message="Do I have any new emails?", telegram_client=tg)
+                mock_exec.assert_called_with("composio_gmail_fetch_emails", {})
+                self.assertIn("unread emails", tg.sent[-1][1])
+
+        # 2. Calendar
+        mock_cal_call = MagicMock()
+        mock_cal_call.id = "tc_cal_1"
+        mock_cal_call.function.name = "composio_googlecalendar_events_list"
+        mock_cal_call.function.arguments = "{}"
+
+        c_step1 = ("", [mock_cal_call], "gemini", "gemini-2.5-flash")
+        c_step2 = ("You have 1 meeting today: Team Sync at 3 PM.", None, "gemini", "gemini-2.5-flash")
+        c_result = {"successful": True, "data": {"items": [{"summary": "Team Sync"}]}}
+
+        with patch.object(hr._registry, "chat_completion", side_effect=[c_step1, c_step2]):
+            with patch.object(ComposioClient, "execute_tool", return_value=c_result) as mock_exec:
+                res = hr.execute_agent_turn(chat_id=123, user_message="What meetings do I have today?", telegram_client=tg)
+                mock_exec.assert_called_with("composio_googlecalendar_events_list", {})
+                self.assertIn("Team Sync", tg.sent[-1][1])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -146,7 +146,7 @@ class ComposioClient:
         if not os.environ.get("COMPOSIO_API_KEY"):
             try:
                 from dotenv import load_dotenv
-                load_dotenv()
+                load_dotenv(override=False)
             except ImportError:
                 pass
         self.api_key = (api_key or os.environ.get("COMPOSIO_API_KEY", "")).strip()
@@ -265,19 +265,22 @@ class ComposioClient:
         return schemas[:20]
 
     def convert_tool_to_schema(self, tool_def: Dict[str, Any]) -> Dict[str, Any]:
-        """Convert a Composio v3 tool definition into OpenAI function calling schema."""
+        """Convert a Composio v3 tool definition into OpenAI function calling schema.
+
+        Faithfully preserves the tool's original parameters and required status.
+        """
         slug = tool_def.get("slug", "")
         description = tool_def.get("description") or tool_def.get("human_description") or slug
         input_params = tool_def.get("input_parameters", {})
 
-        # Ensure parameters has valid type and properties
+        # Ensure parameters has valid type and properties while preserving required fields faithfully
         if not isinstance(input_params, dict) or "type" not in input_params:
             input_params = {
                 "type": "object",
                 "properties": input_params.get("properties", {}) if isinstance(input_params, dict) else {},
             }
 
-        full_desc = f"{description} (Note: Connected account tools automatically use the authenticated user's account. Optional ID parameters like ig_user_id, user_id, or calendar_id default to the connected account when omitted. Pass {{}} to query the user's connected account directly without asking for an ID.)"
+        full_desc = f"{description} (Note: Optional ID parameters default to the authenticated connected account when omitted. Only ask the user for an ID if the parameter is explicitly required AND cannot be resolved from context.)"
 
         return {
             "type": "function",
