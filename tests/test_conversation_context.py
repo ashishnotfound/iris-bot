@@ -49,12 +49,13 @@ class TestConversationContext(unittest.TestCase):
     def test_01_basic_followup_retains_context(self):
         """Test 1 — Basic follow-up: 'try checking it now' receives previous request as context."""
         tg = MockTelegramClient()
+        chat_id = random.randint(100000, 999999)
 
         # Turn 1
         res1 = ("Checking your Instagram account followers...", None, "gemini", "gemini-2.5-flash")
         with patch.object(hr._registry, "chat_completion", return_value=res1) as mock_cc1:
             hr.execute_agent_turn(
-                chat_id=101,
+                chat_id=chat_id,
                 user_message="How many followers do I have on Instagram?",
                 telegram_client=tg,
             )
@@ -63,7 +64,7 @@ class TestConversationContext(unittest.TestCase):
         res2 = ("Your Instagram profile has 100 followers.", None, "gemini", "gemini-2.5-flash")
         with patch.object(hr._registry, "chat_completion", return_value=res2) as mock_cc2:
             hr.execute_agent_turn(
-                chat_id=101,
+                chat_id=chat_id,
                 user_message="try checking it now",
                 telegram_client=tg,
             )
@@ -81,42 +82,46 @@ class TestConversationContext(unittest.TestCase):
     def test_02_pronoun_resolution_retains_context(self):
         """Test 2 — Pronoun resolution: 'what about it now?' receives previous context."""
         tg = MockTelegramClient()
+        chat_id = random.randint(100000, 999999)
 
         # Turn 1
         with patch.object(hr._registry, "chat_completion", return_value=("Checking Instagram...", None, "g", "m")):
-            hr.execute_agent_turn(chat_id=102, user_message="Check my Instagram followers.", telegram_client=tg)
+            hr.execute_agent_turn(chat_id=chat_id, user_message="Check my Instagram followers.", telegram_client=tg)
 
         # Turn 2
         with patch.object(hr._registry, "chat_completion", return_value=("Updated followers...", None, "g", "m")) as mock_cc:
-            hr.execute_agent_turn(chat_id=102, user_message="what about it now?", telegram_client=tg)
+            hr.execute_agent_turn(chat_id=chat_id, user_message="what about it now?", telegram_client=tg)
             sent_messages = mock_cc.call_args_list[0][0][0]
             self.assertIn("Check my Instagram followers.", [m["content"] for m in sent_messages if m["role"] == "user"])
 
     def test_03_multi_turn_task_retains_context(self):
         """Test 3 — Multi-turn task: 'and tomorrow?' receives previous calendar request."""
         tg = MockTelegramClient()
+        chat_id = random.randint(100000, 999999)
 
         # Turn 1
         with patch.object(hr._registry, "chat_completion", return_value=("You have 2 meetings today.", None, "g", "m")):
-            hr.execute_agent_turn(chat_id=103, user_message="Check my calendar.", telegram_client=tg)
+            hr.execute_agent_turn(chat_id=chat_id, user_message="Check my calendar.", telegram_client=tg)
 
         # Turn 2
         with patch.object(hr._registry, "chat_completion", return_value=("Tomorrow you have 1 meeting.", None, "g", "m")) as mock_cc:
-            hr.execute_agent_turn(chat_id=103, user_message="and tomorrow?", telegram_client=tg)
+            hr.execute_agent_turn(chat_id=chat_id, user_message="and tomorrow?", telegram_client=tg)
             sent_messages = mock_cc.call_args_list[0][0][0]
             self.assertIn("Check my calendar.", [m["content"] for m in sent_messages if m["role"] == "user"])
 
     def test_04_conversation_isolation(self):
         """Test 4 — Conversation isolation: Chat A's history never leaks into Chat B's context."""
         tg = MockTelegramClient()
+        chat_a = random.randint(100000, 499999)
+        chat_b = random.randint(500000, 999999)
 
         # Chat A turn
         with patch.object(hr._registry, "chat_completion", return_value=("Check Instagram reply", None, "g", "m")):
-            hr.execute_agent_turn(chat_id=201, user_message="Check Instagram.", telegram_client=tg)
+            hr.execute_agent_turn(chat_id=chat_a, user_message="Check Instagram.", telegram_client=tg)
 
         # Chat B turn
         with patch.object(hr._registry, "chat_completion", return_value=("Check Gmail reply", None, "g", "m")) as mock_cc_b:
-            hr.execute_agent_turn(chat_id=202, user_message="Check Gmail.", telegram_client=tg)
+            hr.execute_agent_turn(chat_id=chat_b, user_message="Check Gmail.", telegram_client=tg)
             sent_messages_b = mock_cc_b.call_args_list[0][0][0]
             contents_b = [m["content"] for m in sent_messages_b if isinstance(m["content"], str)]
             self.assertNotIn("Check Instagram.", contents_b)
@@ -125,12 +130,13 @@ class TestConversationContext(unittest.TestCase):
     def test_05_assistant_history_persisted_and_retrieved(self):
         """Test 5 — Assistant history: Both user AND assistant messages are stored and retrieved."""
         tg = MockTelegramClient()
+        chat_id = random.randint(100000, 999999)
 
         with patch.object(hr._registry, "chat_completion", return_value=("Assistant response #1", None, "g", "m")):
-            hr.execute_agent_turn(chat_id=301, user_message="User message #1", telegram_client=tg)
+            hr.execute_agent_turn(chat_id=chat_id, user_message="User message #1", telegram_client=tg)
 
         with patch.object(hr._registry, "chat_completion", return_value=("Assistant response #2", None, "g", "m")) as mock_cc:
-            hr.execute_agent_turn(chat_id=301, user_message="User message #2", telegram_client=tg)
+            hr.execute_agent_turn(chat_id=chat_id, user_message="User message #2", telegram_client=tg)
             sent_messages = mock_cc.call_args_list[0][0][0]
             user_msgs = [m["content"] for m in sent_messages if m["role"] == "user"]
             asst_msgs = [m["content"] for m in sent_messages if m["role"] == "assistant"]
@@ -140,6 +146,7 @@ class TestConversationContext(unittest.TestCase):
     def test_06_tool_history_does_not_break_context(self):
         """Test 6 — Tool history: Tool calls and results do not destroy conversational context."""
         tg = MockTelegramClient()
+        chat_id = random.randint(100000, 999999)
 
         mock_tool_call = MagicMock()
         mock_tool_call.id = "tc_insta_777"
@@ -152,11 +159,11 @@ class TestConversationContext(unittest.TestCase):
 
         with patch.object(hr._registry, "chat_completion", side_effect=[t1_step1, t1_step2]):
             with patch.object(ComposioClient, "execute_tool", return_value={"successful": True, "data": {"followers_count": 50}}):
-                hr.execute_agent_turn(chat_id=401, user_message="How many followers do I have on Instagram?", telegram_client=tg)
+                hr.execute_agent_turn(chat_id=chat_id, user_message="How many followers do I have on Instagram?", telegram_client=tg)
 
         # Turn 2 follow-up
         with patch.object(hr._registry, "chat_completion", return_value=("Checked again: 50 followers.", None, "g", "m")) as mock_cc2:
-            hr.execute_agent_turn(chat_id=401, user_message="Check it again.", telegram_client=tg)
+            hr.execute_agent_turn(chat_id=chat_id, user_message="Check it again.", telegram_client=tg)
             sent_messages = mock_cc2.call_args_list[0][0][0]
             contents = [str(m["content"]) for m in sent_messages]
             self.assertTrue(any("followers" in c.lower() for c in contents))
@@ -165,14 +172,15 @@ class TestConversationContext(unittest.TestCase):
         """Test 7 — Serverless persistence: Context survives across independent runner instances."""
         tg1 = MockTelegramClient()
         tg2 = MockTelegramClient()
+        chat_id = random.randint(100000, 999999)
 
         # Runner instance 1
         with patch.object(hr._registry, "chat_completion", return_value=("Response turn 1", None, "g", "m")):
-            hr.execute_agent_turn(chat_id=501, user_message="First message", telegram_client=tg1)
+            hr.execute_agent_turn(chat_id=chat_id, user_message="First message", telegram_client=tg1)
 
         # Independent Runner instance 2 (simulating fresh serverless invocation)
         with patch.object(hr._registry, "chat_completion", return_value=("Response turn 2", None, "g", "m")) as mock_cc:
-            hr.execute_agent_turn(chat_id=501, user_message="Second message", telegram_client=tg2)
+            hr.execute_agent_turn(chat_id=chat_id, user_message="Second message", telegram_client=tg2)
             sent_messages = mock_cc.call_args_list[0][0][0]
             self.assertIn("First message", [m["content"] for m in sent_messages if m["role"] == "user"])
 
