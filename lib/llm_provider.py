@@ -2,20 +2,19 @@
 lib/llm_provider.py — Multi-Provider LLM with Key-Ring Failover
 
 Providers supported:
-  - OpenRouter: Multiple API keys (OPENROUTER_API_KEY, OPENROUTER_API_KEY_2, ..., N)
-                Round-robin key selection; auto-marks exhausted keys on 429/402.
   - Gemini:     Google AI Studio free tier via OpenAI-compatible endpoint.
                 Uses GEMINI_API_KEY or GOOGLE_API_KEY.
+                Multi-key ring: GEMINI_API_KEY, GEMINI_API_KEY_2, ..., GEMINI_API_KEY_9
+  - OpenRouter: Multiple API keys (OPENROUTER_API_KEY, OPENROUTER_API_KEY_2, ..., N)
+                Round-robin key selection; auto-marks exhausted keys on 429/402.
   - NVIDIA NIM: NVIDIA's OpenAI-compatible inference. Uses NVIDIA_API_KEY.
 
 Usage:
     from lib.llm_provider import ProviderRegistry
 
     registry = ProviderRegistry()
-    reply, provider = registry.chat_completion(
+    reply, provider, model = registry.chat_completion(
         messages=[{"role": "user", "content": "Hello!"}],
-        model="auto",
-        vision=False,
     )
 """
 
@@ -44,26 +43,37 @@ logger = logging.getLogger(__name__)
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
 NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 
 DEFAULT_MODELS: Dict[str, str] = {
     "openrouter": "google/gemma-4-31b-it:free",
+    "nvidia": "meta/llama-3.1-8b-instruct",
+    "groq": "llama-3.3-70b-versatile",
     "gemini": "gemini-2.5-flash",
-    "nvidia": "meta/llama-3.1-405b-instruct",
 }
 
 VISION_MODELS: Dict[str, str] = {
     "openrouter": "google/gemma-4-31b-it:free",
+    "nvidia": "meta/llama-3.2-90b-vision-instruct",
+    "groq": "llama-3.2-11b-vision-preview",
     "gemini": "gemini-2.5-flash",
-    "nvidia": "microsoft/phi-3-vision-128k-instruct",
 }
 
+# How long to back off an exhausted key (seconds)
+KEY_EXHAUSTED_TTL = 3600  # 1 hour
+
 # ---------------------------------------------------------------------------
-# Base Provider ABC
+# Exceptions
 # ---------------------------------------------------------------------------
 
 
 class LLMKeyExhaustedError(RuntimeError):
     """Raised when a specific API key is rate-limited or out of credits."""
+
+
+# ---------------------------------------------------------------------------
+# Base Provider ABC
+# ---------------------------------------------------------------------------
 
 
 class LLMProvider(ABC):
@@ -85,66 +95,140 @@ class LLMProvider(ABC):
         temperature: float = 0.7,
         max_tokens: int = 4096,
         vision: bool = False,
-    ) -> str: ...
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Tuple[str, Any]: ...
 
 
 # ---------------------------------------------------------------------------
-# OpenRouter Provider — multi-key ring
+# Shared multi-key ring mixin
 # ---------------------------------------------------------------------------
 
 
-class OpenRouterProvider(LLMProvider):
-    """OpenRouter with automatic multi-key round-robin and failover.
+class _KeyRingMixin:
+    """
+    Shared behaviour for providers that support multiple API keys.
 
-    Keys are read from:
-      OPENROUTER_API_KEY      — primary key
-      OPENROUTER_API_KEY_2    — second key
-      ...
-      OPENROUTER_API_KEY_9    — ninth key
-
-    When a key hits 429 or 402, it is marked exhausted for KEY_EXHAUSTED_TTL
-    seconds before being retried.
+    Subclasses must implement `_key_env_names()` to return a list of env var
+    names in priority order.
     """
 
-    KEY_EXHAUSTED_TTL = 3600  # 1 hour
+    _exhausted_until: Dict[str, float]
+    _key_index: int
 
-    def __init__(self) -> None:
-        self._keys: List[str] = self._load_keys()
-        self._exhausted_until: Dict[str, float] = {}
-        self._key_index = 0
+    def _key_env_names(self) -> List[str]:
+        raise NotImplementedError
 
-    @property
-    def name(self) -> str:
-        return "openrouter"
+    def _clean_key(self, raw_val: str) -> Optional[str]:
+        if not raw_val:
+            return None
+        val = raw_val.strip().strip("'\"")
+        val_lower = val.lower()
+        if not val or val_lower in (
+            "none", "null", "undefined", "your_api_key_here",
+            "replace_with_valid_aiza_key", "your_key_here", ""
+        ) or val_lower.startswith("replace_with_") or val_lower.startswith("your_"):
+            return None
+        return val
 
     def _load_keys(self) -> List[str]:
         keys: List[str] = []
-        primary = os.environ.get("OPENROUTER_API_KEY", "").strip()
-        if primary:
-            keys.append(primary)
-        for i in range(2, 10):
-            k = os.environ.get(f"OPENROUTER_API_KEY_{i}", "").strip()
-            if k:
+        for name in self._key_env_names():
+            k = self._clean_key(os.environ.get(name, ""))
+            if k and k not in keys:
                 keys.append(k)
         return keys
 
-    def is_available(self) -> bool:
-        return bool(self._active_keys())
-
-    def _active_keys(self) -> List[str]:
+    def _active_keys(self, keys: List[str]) -> List[str]:
         now = time.time()
-        return [k for k in self._keys if now >= self._exhausted_until.get(k, 0)]
+        return [k for k in keys if now >= self._exhausted_until.get(k, 0)]
 
-    def _mark_exhausted(self, key: str) -> None:
-        self._exhausted_until[key] = time.time() + self.KEY_EXHAUSTED_TTL
-        logger.warning("OpenRouter key ...%s exhausted for %ds", key[-6:], self.KEY_EXHAUSTED_TTL)
+    def _mark_exhausted(self, key: str, ttl: int = KEY_EXHAUSTED_TTL) -> None:
+        self._exhausted_until[key] = time.time() + ttl
+        logger.warning(
+            "%s key ...%s exhausted; backing off for %ds",
+            self.__class__.__name__,
+            key[-6:],
+            ttl,
+        )
 
-    def _pick_key(self) -> Optional[str]:
-        active = self._active_keys()
+    def _pick_key(self, keys: List[str]) -> Optional[str]:
+        active = self._active_keys(keys)
         if not active:
             return None
+        key = active[self._key_index % len(active)]
         self._key_index = (self._key_index + 1) % len(active)
-        return active[self._key_index % len(active)]
+        return key
+
+    def _is_key_or_quota_error(self, e: Exception) -> bool:
+        err_str = str(e).lower()
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        if status in (400, 401, 402, 403, 429):
+            return True
+        return any(
+            w in err_str
+            for w in (
+                "rate limit", "insufficient", "credits", "quota",
+                "resource_exhausted", "exhausted", "too many requests",
+                "invalid api key", "invalid_api_key", "please pass a valid api key",
+                "missing authentication header", "unauthorized", "authentication",
+            )
+        )
+
+    _is_quota_error = _is_key_or_quota_error
+
+
+# ---------------------------------------------------------------------------
+# Gemini Provider — multi-key ring
+# ---------------------------------------------------------------------------
+
+
+class GeminiProvider(LLMProvider, _KeyRingMixin):
+    """Google Gemini via OpenAI-compatible endpoint (free tier) with key-ring support.
+
+    Keys are read from:
+      GEMINI_API_KEY  / GOOGLE_API_KEY      — primary (both checked)
+      GEMINI_API_KEY_2                       — second key
+      ...
+      GEMINI_API_KEY_9                       — ninth key
+
+    When a key hits 429/quota, it is marked exhausted for KEY_EXHAUSTED_TTL
+    seconds before being retried.
+    """
+
+    def __init__(self) -> None:
+        self._exhausted_until: Dict[str, float] = {}
+        self._key_index = 0
+        self._keys = self._load_keys()
+
+    def _load_keys(self) -> List[str]:
+        keys: List[str] = []
+        for name in self._key_env_names():
+            cleaned = self._clean_key(os.environ.get(name, ""))
+            if cleaned:
+                if not cleaned.startswith("AIza"):
+                    logger.warning(
+                        "GeminiProvider: %s value does not start with 'AIza'. Skipping invalid key format.",
+                        name,
+                    )
+                    continue
+                if cleaned not in keys:
+                    keys.append(cleaned)
+        return keys
+
+    def _key_env_names(self) -> List[str]:
+        names = ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
+        for i in range(2, 10):
+            names.append(f"GEMINI_API_KEY_{i}")
+        return names
+
+    @property
+    def name(self) -> str:
+        return "gemini"
+
+    def is_available(self) -> bool:
+        # Re-load keys on each check so keys set after module init are visible
+        self._keys = self._load_keys()
+        return bool(self._active_keys(self._keys))
 
     def chat_completion(
         self,
@@ -154,15 +238,98 @@ class OpenRouterProvider(LLMProvider):
         temperature: float = 0.7,
         max_tokens: int = 4096,
         vision: bool = False,
-    ) -> str:
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Tuple[str, Any]:
+        self._keys = self._load_keys()
+        active = self._active_keys(self._keys)
+        if not active:
+            raise LLMKeyExhaustedError("All Gemini keys are exhausted or unconfigured.")
+
         try:
             from openai import OpenAI
         except ImportError:
             raise RuntimeError("openai package not installed. Run: pip install openai")
 
-        active = self._active_keys()
+        use_model = model or (VISION_MODELS["gemini"] if vision else DEFAULT_MODELS["gemini"])
+        last_error: Optional[Exception] = None
+
+        for key in list(active):
+            try:
+                client = OpenAI(base_url=GEMINI_BASE_URL, api_key=key)
+                kwargs = {
+                    "model": use_model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                }
+                if tools:
+                    kwargs["tools"] = tools
+                resp = client.chat.completions.create(**kwargs)
+                choice_msg = resp.choices[0].message
+                return (choice_msg.content or "", getattr(choice_msg, "tool_calls", None))
+            except Exception as e:
+                if self._is_key_or_quota_error(e):
+                    self._mark_exhausted(key)
+                    last_error = e
+                    continue
+                raise RuntimeError(f"Gemini API error: {e}") from e
+
+        raise LLMKeyExhaustedError(f"All Gemini keys failed. Last: {last_error}")
+
+
+# ---------------------------------------------------------------------------
+# OpenRouter Provider — multi-key ring
+# ---------------------------------------------------------------------------
+
+
+class OpenRouterProvider(LLMProvider, _KeyRingMixin):
+    """OpenRouter with automatic multi-key round-robin and failover.
+
+    Keys are read from:
+      OPENROUTER_API_KEY      — primary key
+      OPENROUTER_API_KEY_2    — second key
+      ...
+      OPENROUTER_API_KEY_9    — ninth key
+    """
+
+    def __init__(self) -> None:
+        self._exhausted_until: Dict[str, float] = {}
+        self._key_index = 0
+        self._keys = self._load_keys()
+
+    def _key_env_names(self) -> List[str]:
+        names = ["OPENROUTER_API_KEY"]
+        for i in range(2, 10):
+            names.append(f"OPENROUTER_API_KEY_{i}")
+        return names
+
+    @property
+    def name(self) -> str:
+        return "openrouter"
+
+    def is_available(self) -> bool:
+        self._keys = self._load_keys()
+        return bool(self._active_keys(self._keys))
+
+    def chat_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        *,
+        model: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        vision: bool = False,
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Tuple[str, Any]:
+        self._keys = self._load_keys()
+        active = self._active_keys(self._keys)
         if not active:
             raise LLMKeyExhaustedError("All OpenRouter keys are exhausted.")
+
+        try:
+            from openai import OpenAI
+        except ImportError:
+            raise RuntimeError("openai package not installed. Run: pip install openai")
 
         use_model = model or (VISION_MODELS["openrouter"] if vision else DEFAULT_MODELS["openrouter"])
         last_error: Optional[Exception] = None
@@ -177,17 +344,19 @@ class OpenRouterProvider(LLMProvider):
                         "X-Title": "Iris Agent",
                     },
                 )
-                resp = client.chat.completions.create(
-                    model=use_model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                )
-                return resp.choices[0].message.content or ""
+                kwargs = {
+                    "model": use_model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                }
+                if tools:
+                    kwargs["tools"] = tools
+                resp = client.chat.completions.create(**kwargs)
+                choice_msg = resp.choices[0].message
+                return (choice_msg.content or "", getattr(choice_msg, "tool_calls", None))
             except Exception as e:
-                err_str = str(e).lower()
-                status = getattr(getattr(e, "response", None), "status_code", None)
-                if status in (429, 402) or any(w in err_str for w in ("rate limit", "insufficient", "credits", "quota")):
+                if self._is_key_or_quota_error(e):
                     self._mark_exhausted(key)
                     last_error = e
                     continue
@@ -199,7 +368,8 @@ class OpenRouterProvider(LLMProvider):
         """Fetch free models from OpenRouter catalog."""
         try:
             import requests
-            key = self._pick_key()
+            self._keys = self._load_keys()
+            key = self._pick_key(self._keys)
             if not key:
                 return []
             r = requests.get(
@@ -227,74 +397,37 @@ class OpenRouterProvider(LLMProvider):
 
 
 # ---------------------------------------------------------------------------
-# Gemini Provider
-# ---------------------------------------------------------------------------
-
-
-class GeminiProvider(LLMProvider):
-    """Google Gemini via OpenAI-compatible endpoint (free tier)."""
-
-    @property
-    def name(self) -> str:
-        return "gemini"
-
-    def _key(self) -> Optional[str]:
-        return (
-            os.environ.get("GEMINI_API_KEY", "")
-            or os.environ.get("GOOGLE_API_KEY", "")
-        ).strip() or None
-
-    def is_available(self) -> bool:
-        return bool(self._key())
-
-    def chat_completion(
-        self,
-        messages: List[Dict[str, Any]],
-        *,
-        model: Optional[str] = None,
-        temperature: float = 0.7,
-        max_tokens: int = 4096,
-        vision: bool = False,
-    ) -> str:
-        key = self._key()
-        if not key:
-            raise RuntimeError("GEMINI_API_KEY not configured.")
-        try:
-            from openai import OpenAI
-        except ImportError:
-            raise RuntimeError("openai package not installed.")
-
-        use_model = model or (VISION_MODELS["gemini"] if vision else DEFAULT_MODELS["gemini"])
-        client = OpenAI(base_url=GEMINI_BASE_URL, api_key=key)
-        try:
-            resp = client.chat.completions.create(
-                model=use_model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-            return resp.choices[0].message.content or ""
-        except Exception as e:
-            raise RuntimeError(f"Gemini API error: {e}") from e
-
-
-# ---------------------------------------------------------------------------
 # NVIDIA NIM Provider
 # ---------------------------------------------------------------------------
 
 
-class NvidiaProvider(LLMProvider):
-    """NVIDIA NIM via OpenAI-compatible endpoint (free credits)."""
+class NvidiaProvider(LLMProvider, _KeyRingMixin):
+    """NVIDIA NIM via OpenAI-compatible endpoint (free credits).
+
+    Keys are read from:
+      NVIDIA_API_KEY     — primary key
+      NVIDIA_API_KEY_2   — second key
+      ...
+    """
+
+    def __init__(self) -> None:
+        self._exhausted_until: Dict[str, float] = {}
+        self._key_index = 0
+        self._keys = self._load_keys()
+
+    def _key_env_names(self) -> List[str]:
+        names = ["NVIDIA_API_KEY"]
+        for i in range(2, 10):
+            names.append(f"NVIDIA_API_KEY_{i}")
+        return names
 
     @property
     def name(self) -> str:
         return "nvidia"
 
-    def _key(self) -> Optional[str]:
-        return os.environ.get("NVIDIA_API_KEY", "").strip() or None
-
     def is_available(self) -> bool:
-        return bool(self._key())
+        self._keys = self._load_keys()
+        return bool(self._active_keys(self._keys))
 
     def chat_completion(
         self,
@@ -304,32 +437,130 @@ class NvidiaProvider(LLMProvider):
         temperature: float = 0.7,
         max_tokens: int = 4096,
         vision: bool = False,
-    ) -> str:
-        key = self._key()
-        if not key:
-            raise RuntimeError("NVIDIA_API_KEY not configured.")
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Tuple[str, Any]:
+        self._keys = self._load_keys()
+        active = self._active_keys(self._keys)
+        if not active:
+            raise LLMKeyExhaustedError("All NVIDIA keys are exhausted or unconfigured.")
+
         try:
             from openai import OpenAI
         except ImportError:
             raise RuntimeError("openai package not installed.")
 
         use_model = model or (VISION_MODELS["nvidia"] if vision else DEFAULT_MODELS["nvidia"])
-        client = OpenAI(base_url=NVIDIA_BASE_URL, api_key=key)
-        try:
-            resp = client.chat.completions.create(
-                model=use_model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-            return resp.choices[0].message.content or ""
-        except Exception as e:
-            raise RuntimeError(f"NVIDIA NIM API error: {e}") from e
+        last_error: Optional[Exception] = None
+
+        for key in list(active):
+            try:
+                client = OpenAI(base_url=NVIDIA_BASE_URL, api_key=key)
+                kwargs = {
+                    "model": use_model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                }
+                if tools:
+                    kwargs["tools"] = tools
+                resp = client.chat.completions.create(**kwargs)
+                choice_msg = resp.choices[0].message
+                return (choice_msg.content or "", getattr(choice_msg, "tool_calls", None))
+            except Exception as e:
+                if self._is_key_or_quota_error(e):
+                    self._mark_exhausted(key)
+                    last_error = e
+                    continue
+                raise RuntimeError(f"NVIDIA NIM API error: {e}") from e
+
+        raise LLMKeyExhaustedError(f"All NVIDIA keys failed. Last: {last_error}")
 
 
 # ---------------------------------------------------------------------------
 # Provider Registry — ordered failover
 # ---------------------------------------------------------------------------
+
+
+
+# ---------------------------------------------------------------------------
+# Groq Cloud Provider — ultra-fast LLM & Vision
+# ---------------------------------------------------------------------------
+
+
+class GroqProvider(LLMProvider, _KeyRingMixin):
+    """Groq Cloud via OpenAI-compatible endpoint (free tier, ultra-fast & vision).
+
+    Keys are read from:
+      GROQ_API_KEY      — primary key
+      GROQ_API_KEY_2    — second key
+      ...
+      GROQ_API_KEY_9    — ninth key
+    """
+
+    def __init__(self) -> None:
+        self._exhausted_until: Dict[str, float] = {}
+        self._key_index = 0
+        self._keys = self._load_keys()
+
+    def _key_env_names(self) -> List[str]:
+        names = ["GROQ_API_KEY"]
+        for i in range(2, 10):
+            names.append(f"GROQ_API_KEY_{i}")
+        return names
+
+    @property
+    def name(self) -> str:
+        return "groq"
+
+    def is_available(self) -> bool:
+        self._keys = self._load_keys()
+        return bool(self._active_keys(self._keys))
+
+    def chat_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        *,
+        model: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        vision: bool = False,
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Tuple[str, Any]:
+        self._keys = self._load_keys()
+        active = self._active_keys(self._keys)
+        if not active:
+            raise LLMKeyExhaustedError("All Groq keys are exhausted or unconfigured.")
+
+        try:
+            from openai import OpenAI
+        except ImportError:
+            raise RuntimeError("openai package not installed.")
+
+        use_model = model or (VISION_MODELS["groq"] if vision else DEFAULT_MODELS["groq"])
+        last_error: Optional[Exception] = None
+
+        for key in list(active):
+            try:
+                client = OpenAI(base_url=GROQ_BASE_URL, api_key=key)
+                kwargs = {
+                    "model": use_model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                }
+                if tools:
+                    kwargs["tools"] = tools
+                resp = client.chat.completions.create(**kwargs)
+                choice_msg = resp.choices[0].message
+                return (choice_msg.content or "", getattr(choice_msg, "tool_calls", None))
+            except Exception as e:
+                if self._is_key_or_quota_error(e):
+                    self._mark_exhausted(key)
+                    last_error = e
+                    continue
+                raise RuntimeError(f"Groq API error: {e}") from e
+
+        raise LLMKeyExhaustedError(f"All Groq keys failed. Last: {last_error}")
 
 
 class ProviderRegistry:
@@ -339,13 +570,14 @@ class ProviderRegistry:
     """
 
     _PROVIDER_CLASSES: Dict[str, type] = {
-        "gemini": GeminiProvider,
         "openrouter": OpenRouterProvider,
         "nvidia": NvidiaProvider,
+        "groq": GroqProvider,
+        "gemini": GeminiProvider,
     }
 
     def __init__(self, provider_order: Optional[List[str]] = None) -> None:
-        order = provider_order or ["gemini", "openrouter", "nvidia"]
+        order = provider_order or ["openrouter", "nvidia", "groq", "gemini"]
         self._providers: List[LLMProvider] = [
             self._PROVIDER_CLASSES[n]()  # type: ignore[abstract]
             for n in order
@@ -365,15 +597,17 @@ class ProviderRegistry:
         temperature: float = 0.7,
         max_tokens: int = 4096,
         vision: bool = False,
-    ) -> Tuple[str, str, str]:
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Tuple[str, Any, str, str]:
         """Execute a chat completion with candidate-aware provider failover.
 
         Args:
             messages:    OpenAI-format messages.
             candidates:  Optional list of (provider_name, model_id, spec) tuples
-                         from TaskRouter.
-            model:       Optional manual model override.
-            provider:    Optional manual provider override.
+                         from TaskRouter. When provided, ONLY these candidates are
+                         tried (no fallback to the full provider list).
+            model:       Optional manual model override (used in Case B only).
+            provider:    Optional manual provider override (Case B only).
             temperature: Sampling temperature.
             max_tokens:  Max tokens in completion.
             vision:      If True, enforces vision capability.
@@ -386,7 +620,7 @@ class ProviderRegistry:
         """
         errors: List[str] = []
 
-        # Case A: Candidates list provided by TaskRouter
+        # Case A: Candidates list provided by TaskRouter — use ONLY these
         if candidates:
             for prov_name, model_id, spec in candidates:
                 p = self.get_provider(prov_name)
@@ -394,15 +628,16 @@ class ProviderRegistry:
                     errors.append(f"{prov_name}/{model_id}: provider unconfigured or unavailable")
                     continue
                 try:
-                    text = p.chat_completion(
+                    text, tool_calls = p.chat_completion(
                         messages,
                         model=model_id,
                         temperature=temperature,
                         max_tokens=max_tokens,
                         vision=vision,
+                        tools=tools,
                     )
-                    logger.info("LLM success: provider=%s model=%s", prov_name, model_id)
-                    return text, prov_name, model_id
+                    logger.info("LLM success: provider=%s model=%s tool_calls=%s", prov_name, model_id, bool(tool_calls))
+                    return text, tool_calls, prov_name, model_id
                 except LLMKeyExhaustedError as e:
                     errors.append(f"{prov_name}/{model_id}: key exhausted — {e}")
                     continue
@@ -410,8 +645,12 @@ class ProviderRegistry:
                     errors.append(f"{prov_name}/{model_id}: {e}")
                     logger.warning("Candidate %s/%s failed: %s", prov_name, model_id, e)
                     continue
+            # All candidates exhausted — raise with full error context
+            raise RuntimeError(
+                "All candidate LLM providers failed:\n" + "\n".join(f"  • {e}" for e in errors)
+            )
 
-        # Case B: Standard provider order fallback
+        # Case B: Standard provider order fallback (no candidates provided)
         prov_candidates = self._providers
         if provider:
             prov_candidates = [p for p in self._providers if p.name == provider]
@@ -424,16 +663,19 @@ class ProviderRegistry:
                 continue
             use_model = model
             try:
-                text = p.chat_completion(
+                text, tool_calls = p.chat_completion(
                     messages,
                     model=use_model,
                     temperature=temperature,
                     max_tokens=max_tokens,
                     vision=vision,
+                    tools=tools,
                 )
-                used_model = use_model or (VISION_MODELS.get(p.name, "") if vision else DEFAULT_MODELS.get(p.name, ""))
-                logger.info("LLM response from provider=%s model=%s", p.name, used_model)
-                return text, p.name, used_model
+                used_model = use_model or (
+                    VISION_MODELS.get(p.name, "") if vision else DEFAULT_MODELS.get(p.name, "")
+                )
+                logger.info("LLM response from provider=%s model=%s tool_calls=%s", p.name, used_model, bool(tool_calls))
+                return text, tool_calls, p.name, used_model
             except LLMKeyExhaustedError as e:
                 errors.append(f"{p.name}: key exhausted — {e}")
                 continue

@@ -20,9 +20,10 @@ from urllib.parse import parse_qs, urlparse
 # Ensure api directory is on sys.path for lib imports
 api_dir = Path(__file__).resolve().parent
 workspace_dir = api_dir.parent
-for p in [str(api_dir), str(workspace_dir)]:
-    if p not in sys.path:
-        sys.path.insert(0, p)
+if str(workspace_dir) not in sys.path:
+    sys.path.append(str(workspace_dir))
+if str(api_dir) not in sys.path:
+    sys.path.insert(0, str(api_dir))
 
 logger = logging.getLogger(__name__)
 

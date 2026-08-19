@@ -90,17 +90,6 @@ MODEL_CATALOG: List[ModelSpec] = [
         context_window=1000000,
         enabled=True,
     ),
-    ModelSpec(
-        provider="gemini",
-        model_id="gemini-2.5-flash",
-        tier=ModelTier.FAST,
-        free=True,
-        vision=True,
-        tools=True,
-        reasoning=False,
-        context_window=1000000,
-        enabled=True,
-    ),
 
     # ── OpenRouter (Free Models Catalog) ──
     ModelSpec(
@@ -134,6 +123,41 @@ MODEL_CATALOG: List[ModelSpec] = [
         tools=True,
         reasoning=True,
         context_window=1000000,
+        enabled=True,
+    ),
+
+        # ── Groq Cloud (Free Tier — Ultra-fast & Vision) ──
+    ModelSpec(
+        provider="groq",
+        model_id="llama-3.3-70b-versatile",
+        tier=ModelTier.BALANCED,
+        free=True,
+        vision=False,
+        tools=True,
+        reasoning=True,
+        context_window=128000,
+        enabled=True,
+    ),
+    ModelSpec(
+        provider="groq",
+        model_id="llama-3.2-11b-vision-preview",
+        tier=ModelTier.BALANCED,
+        free=True,
+        vision=True,
+        tools=True,
+        reasoning=False,
+        context_window=128000,
+        enabled=True,
+    ),
+    ModelSpec(
+        provider="groq",
+        model_id="llama-3.1-8b-instant",
+        tier=ModelTier.FAST,
+        free=True,
+        vision=False,
+        tools=True,
+        reasoning=False,
+        context_window=128000,
         enabled=True,
     ),
 
@@ -289,7 +313,10 @@ class TaskRouter:
         Returns:
             RoutingDecision telemetry struct.
         """
-        active = set(active_providers or ["gemini", "openrouter", "nvidia"])
+        if active_providers is not None:
+            active = set(active_providers)
+        else:
+            active = {"openrouter", "nvidia", "groq", "gemini"}
 
         # ── 1. Check Manual Override ──
         if manual_model_override and manual_model_override.strip().lower() not in ("auto", ""):
@@ -366,15 +393,25 @@ class TaskRouter:
             ModelTier.BALANCED: {ModelTier.BALANCED: 0, ModelTier.POWERFUL: 1, ModelTier.FAST: 2},
             ModelTier.FAST:     {ModelTier.FAST: 0, ModelTier.BALANCED: 1, ModelTier.POWERFUL: 2},
         }
-        prov_weights = {"gemini": 0, "openrouter": 1, "nvidia": 2}
+        prov_weights = {"openrouter": 0, "nvidia": 1, "groq": 2, "gemini": 3}
 
         def _sort_key(spec: ModelSpec) -> Tuple[int, int]:
-            tier_dist = tier_weights[target_tier].get(spec.tier, 9)
             prov_dist = prov_weights.get(spec.provider, 9)
-            return (tier_dist, prov_dist)
+            tier_dist = tier_weights[target_tier].get(spec.tier, 9)
+            return (prov_dist, tier_dist)
 
         sorted_specs = sorted(eligible, key=_sort_key)
         candidates = [(s.provider, s.model_id, s) for s in sorted_specs]
+
+        # Deduplicate candidates by (provider, model_id)
+        seen = set()
+        unique_candidates = []
+        for c in candidates:
+            key = (c[0], c[1])
+            if key not in seen:
+                seen.add(key)
+                unique_candidates.append(c)
+        candidates = unique_candidates
 
         logger.info(
             "TaskRouter: classified tier=%s reason=%r candidates=%s",

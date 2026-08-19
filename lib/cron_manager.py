@@ -1,12 +1,18 @@
 """
-lib/cron_manager.py — Autonomous Cron Job Runner
+lib/cron_manager.py — Autonomous Cron Job Runner (Phase 2)
 
 Queries the Supabase `cron_jobs` table for jobs that are due to run,
-executes each as a full Iris agent turn, sends results to Telegram, and
-updates the next scheduled run time.
+executes each as a full Iris agent turn, sends structured results to
+Telegram, and updates the next scheduled run time.
 
-This module is designed to be called by a Vercel Cron endpoint
-(e.g., GET /api/cron, triggered every minute).
+Phase 2 additions:
+  - Running-lock guard (prevents duplicate concurrent executions)
+  - Retry with exponential backoff on failure
+  - Structured success/failure Telegram notifications
+  - Idempotency tracking via action_log table
+  - Job cancellation
+
+Called by: Vercel Cron endpoint (GET /api/cron, every minute)
 
 Requires: croniter   pip install croniter
           requests   pip install requests
@@ -32,12 +38,11 @@ def next_run_for(cron_expression: str) -> str:
     """Calculate the next run time for a cron expression.
 
     Returns an ISO-8601 UTC string suitable for Supabase TIMESTAMPTZ.
-
-    Requires the `croniter` package (pip install croniter).
-    Falls back to "now + 60s" if croniter is unavailable.
+    Falls back to "now + 60s" if croniter is unavailable or invalid.
     """
     try:
         from croniter import croniter
+
         now = datetime.now(timezone.utc)
         cron = croniter(cron_expression, now)
         nxt = cron.get_next(datetime)
@@ -85,6 +90,7 @@ def _supabase_headers() -> Dict[str, str]:
 def _fetch_due_jobs() -> List[Dict[str, Any]]:
     """Fetch all enabled cron jobs whose next_run_at is <= now."""
     import requests
+
     base = _supabase_url()
     if not base:
         return []
@@ -96,7 +102,11 @@ def _fetch_due_jobs() -> List[Dict[str, Any]]:
             params={
                 "enabled": "eq.true",
                 "next_run_at": f"lte.{now_iso}",
-                "select": "job_id,chat_id,cron_expression,task_description",
+                "select": (
+                    "job_id,chat_id,cron_expression,task_description,"
+                    "timezone,retry_count,max_retries,action_type,action_params,"
+                    "running_since"
+                ),
             },
             timeout=8,
         )
@@ -112,6 +122,7 @@ def _fetch_due_jobs() -> List[Dict[str, Any]]:
 def _update_next_run(job_id: str, cron_expression: str) -> None:
     """Compute and persist the next run time for a job after it executes."""
     import requests
+
     base = _supabase_url()
     if not base:
         return
@@ -124,6 +135,7 @@ def _update_next_run(job_id: str, cron_expression: str) -> None:
             json={
                 "last_run_at": datetime.now(timezone.utc).isoformat(),
                 "next_run_at": nxt,
+                "running_since": None,  # clear lock
             },
             timeout=6,
         )
@@ -133,9 +145,10 @@ def _update_next_run(job_id: str, cron_expression: str) -> None:
         logger.error("update_next_run error for job %s: %s", job_id, e)
 
 
-def _mark_job_error(job_id: str, error: str) -> None:
-    """Disable a job that has repeatedly failed to prevent spam."""
+def _disable_job(job_id: str, error: str) -> None:
+    """Disable a job after max retries are exhausted."""
     import requests
+
     base = _supabase_url()
     if not base:
         return
@@ -145,10 +158,60 @@ def _mark_job_error(job_id: str, error: str) -> None:
             headers=_supabase_headers(),
             params={"job_id": f"eq.{job_id}"},
             json={
+                "enabled": False,
+                "last_error": error[:1000],
+                "running_since": None,
                 "last_run_at": datetime.now(timezone.utc).isoformat(),
-                # Still advance next_run so it doesn't hammer on every poll
-                "next_run_at": next_run_for("*/5 * * * *"),
             },
+            timeout=6,
+        )
+        logger.warning("Job %s disabled after max retries: %s", job_id[:8], error[:200])
+    except Exception as e:
+        logger.error("Failed to disable job %s: %s", job_id[:8], e)
+
+
+def _schedule_retry(job_id: str, retry_count: int, error: str) -> None:
+    """Schedule a job retry with exponential backoff."""
+    import requests
+    from lib.job_runner import next_retry_at
+
+    base = _supabase_url()
+    if not base:
+        return
+    try:
+        retry_at = next_retry_at(retry_count)
+        requests.patch(
+            f"{base}/rest/v1/cron_jobs",
+            headers=_supabase_headers(),
+            params={"job_id": f"eq.{job_id}"},
+            json={
+                "retry_count": retry_count + 1,
+                "last_error": error[:1000],
+                "next_run_at": retry_at,
+                "running_since": None,
+            },
+            timeout=6,
+        )
+        logger.info(
+            "Job %s retry #%d scheduled at %s", job_id[:8], retry_count + 1, retry_at
+        )
+    except Exception as e:
+        logger.error("_schedule_retry failed for job %s: %s", job_id[:8], e)
+
+
+def _reset_retry_count(job_id: str) -> None:
+    """Reset retry_count to 0 after a successful run."""
+    import requests
+
+    base = _supabase_url()
+    if not base:
+        return
+    try:
+        requests.patch(
+            f"{base}/rest/v1/cron_jobs",
+            headers=_supabase_headers(),
+            params={"job_id": f"eq.{job_id}"},
+            json={"retry_count": 0, "last_error": None},
             timeout=6,
         )
     except Exception:
@@ -161,24 +224,30 @@ def _mark_job_error(job_id: str, error: str) -> None:
 
 
 def run_due_jobs() -> Dict[str, Any]:
-    """Check for due cron jobs and execute each one.
+    """Check for due cron jobs and execute each one reliably.
 
     Returns:
-        {"ran": [job_id, ...], "errors": {job_id: error_msg, ...}}
+        {"ran": [job_id, ...], "skipped": [job_id, ...], "errors": {job_id: msg, ...}}
 
     Called by the Vercel cron endpoint (/api/cron) every minute.
     """
     jobs = _fetch_due_jobs()
     if not jobs:
         logger.debug("cron_manager: no jobs due")
-        return {"ran": [], "errors": {}}
+        return {"ran": [], "skipped": [], "errors": {}}
 
     # Import here to avoid circular dependency at module level
     from lib.hermes_runner import execute_agent_turn
+    from lib.job_runner import (
+        _acquire_lock,
+        _release_lock,
+        send_job_notification,
+    )
     from lib.telegram_client import TelegramClient
 
     tg = TelegramClient()
     ran: List[str] = []
+    skipped: List[str] = []
     errors: Dict[str, str] = {}
 
     for job in jobs:
@@ -186,11 +255,23 @@ def run_due_jobs() -> Dict[str, Any]:
         chat_id = int(job["chat_id"])
         cron_expr = job["cron_expression"]
         task = job["task_description"]
+        retry_count = int(job.get("retry_count") or 0)
+        max_retries = int(job.get("max_retries") or 3)
+        job_summary = task[:100]
 
-        logger.info("Running cron job %s for chat_id=%s: %s", job_id[:8], chat_id, task[:60])
+        logger.info(
+            "Processing cron job %s for chat_id=%s: %s (retry=%d)",
+            job_id[:8], chat_id, task[:60], retry_count,
+        )
+
+        # ── Running-lock guard: prevents duplicate concurrent executions ──
+        if not _acquire_lock(job_id):
+            logger.info("Job %s is already running — skipping this invocation", job_id[:8])
+            skipped.append(job_id)
+            continue
 
         try:
-            # Notify the user the scheduled job is starting
+            # Notify user that the scheduled job is starting
             tg.send_message(
                 chat_id,
                 f"⏰ *Scheduled Task Running*\n_{task[:100]}_",
@@ -206,23 +287,81 @@ def run_due_jobs() -> Dict[str, Any]:
 
             if result.get("status") == "success":
                 ran.append(job_id)
+                _reset_retry_count(job_id)
+                _update_next_run(job_id, cron_expr)
+
+                # Structured success notification
+                next_run = next_run_for(cron_expr)
+                send_job_notification(
+                    tg,
+                    chat_id,
+                    job_summary=job_summary,
+                    next_run_at=next_run,
+                    results=[{"action": "Task", "status": "ok", "detail": "Completed successfully"}],
+                    failed=False,
+                )
             else:
-                err = result.get("error", "unknown error")
+                err = result.get("error", "agent returned non-success status")
                 errors[job_id] = err
-                logger.warning("Cron job %s failed: %s", job_id[:8], err)
+                _handle_failure(
+                    job_id, chat_id, cron_expr, err,
+                    retry_count, max_retries, job_summary, tg
+                )
 
         except Exception as e:
             err_str = str(e)
             errors[job_id] = err_str
             logger.exception("Cron job %s raised an exception: %s", job_id[:8], err_str)
-            try:
-                tg.send_message(chat_id, f"⚠️ Scheduled task failed: {err_str[:200]}")
-            except Exception:
-                pass
+            _handle_failure(
+                job_id, chat_id, cron_expr, err_str,
+                retry_count, max_retries, job_summary, tg
+            )
 
-        finally:
-            # Always advance next_run_at so the job isn't re-executed immediately
-            _update_next_run(job_id, cron_expr)
+    logger.info(
+        "cron_manager: ran=%d skipped=%d errors=%d",
+        len(ran), len(skipped), len(errors),
+    )
+    return {"ran": ran, "skipped": skipped, "errors": errors}
 
-    logger.info("cron_manager: ran=%d errors=%d", len(ran), len(errors))
-    return {"ran": ran, "errors": errors}
+
+def _handle_failure(
+    job_id: str,
+    chat_id: int,
+    cron_expr: str,
+    error: str,
+    retry_count: int,
+    max_retries: int,
+    job_summary: str,
+    tg,
+) -> None:
+    """Handle a job failure: retry or disable, and notify user."""
+    from lib.job_runner import send_job_notification, next_retry_at
+
+    if retry_count < max_retries:
+        retry_at = next_retry_at(retry_count)
+        _schedule_retry(job_id, retry_count, error)
+        tg.send_message(
+            chat_id,
+            f"⚠️ *Scheduled task failed* (attempt {retry_count + 1}/{max_retries + 1})\n"
+            f"_{job_summary}_\n\n"
+            f"Error: {error[:200]}\n"
+            f"Retrying automatically...",
+            parse_mode="Markdown",
+        )
+    else:
+        # Max retries exhausted — disable the job
+        _disable_job(job_id, error)
+        send_job_notification(
+            tg,
+            chat_id,
+            job_summary=job_summary,
+            next_run_at=None,
+            results=[{"action": "Task", "status": "fail", "detail": error[:300]}],
+            failed=True,
+        )
+        tg.send_message(
+            chat_id,
+            f"🔴 *Automation disabled* — failed {max_retries + 1} times consecutively.\n"
+            f"Use `/cron list` to see your jobs and `/cron add` to re-enable it.",
+            parse_mode="Markdown",
+        )

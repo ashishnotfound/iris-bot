@@ -1,5 +1,5 @@
 """
-lib/auth.py — Telegram authentication and allowlist enforcement.
+api/lib/auth.py — Telegram authentication and allowlist enforcement.
 
 Validates:
   1. Telegram webhook secret token header
@@ -27,7 +27,7 @@ def parse_allowed_users() -> frozenset[int]:
     ids: list[int] = []
     for part in re.split(r"[,\s]+", cleaned):
         part = part.strip()
-        if part.isdigit():
+        if part.lstrip("-").isdigit():
             ids.append(int(part))
     return frozenset(ids)
 
@@ -45,9 +45,20 @@ def is_allowed(chat_id: int | str) -> bool:
         return False
 
 def validate_webhook_secret(header_value: Optional[str]) -> bool:
-    """Verify the X-Telegram-Bot-Api-Secret-Token header."""
-    expected = (os.environ.get("TELEGRAM_WEBHOOK_SECRET") or "iris_secret_token_8916712872_v1").strip()
+    """Verify the X-Telegram-Bot-Api-Secret-Token header.
+
+    The secret is read from TELEGRAM_WEBHOOK_SECRET env var exclusively.
+    If the env var is not set, all requests are accepted (open webhook — not
+    recommended for production, but avoids breaking a misconfigured deployment
+    instead of silently dropping all messages).
+    """
+    expected = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "").strip()
     if not expected:
+        # No secret configured — allow all (warn loudly)
+        logger.warning(
+            "TELEGRAM_WEBHOOK_SECRET is not set. "
+            "Webhook is open to unauthenticated requests."
+        )
         return True
     if not header_value:
         return False
