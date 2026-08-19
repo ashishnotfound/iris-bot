@@ -39,6 +39,14 @@ class TestConversationContext(unittest.TestCase):
                 self.db_path.unlink()
             except Exception:
                 pass
+        try:
+            import sqlite3
+            hr._init_local_db()
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.execute("DELETE FROM local_messages")
+                conn.commit()
+        except Exception:
+            pass
         self.db_patcher = patch.object(hr, "_local_sqlite_db_path", return_value=self.db_path)
         self.db_patcher.start()
 
