@@ -34,11 +34,8 @@ class MockTelegramClient:
 class TestConversationContext(unittest.TestCase):
     def setUp(self):
         self.db_path = Path(os.path.dirname(__file__)) / "test_context_tmp.db"
-        if self.db_path.exists():
-            try:
-                self.db_path.unlink()
-            except Exception:
-                pass
+        self.db_patcher = patch.object(hr, "_local_sqlite_db_path", return_value=self.db_path)
+        self.db_patcher.start()
         try:
             import sqlite3
             hr._init_local_db()
@@ -47,8 +44,6 @@ class TestConversationContext(unittest.TestCase):
                 conn.commit()
         except Exception:
             pass
-        self.db_patcher = patch.object(hr, "_local_sqlite_db_path", return_value=self.db_path)
-        self.db_patcher.start()
 
     def tearDown(self):
         self.db_patcher.stop()
