@@ -4,6 +4,7 @@ tests/test_conversation_context.py — Test suite for Short-Term Conversation Co
 
 import json
 import os
+import random
 import sys
 import tempfile
 import unittest
