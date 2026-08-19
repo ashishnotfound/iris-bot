@@ -57,6 +57,13 @@ class handler(BaseHTTPRequestHandler):
         text = message.get("text") or message.get("caption") or ""
         photo = message.get("photo")
         voice = message.get("voice")
+        document = message.get("document")
+
+        # Map uncompressed image document attachments to photo array for vision processing
+        if document and not photo:
+            mime = (document.get("mime_type") or "").lower()
+            if mime.startswith("image/"):
+                photo = [{"file_id": document.get("file_id")}]
 
         if not chat_id:
             self._send_json(200, {"status": "ignored", "reason": "no_chat_id"})
