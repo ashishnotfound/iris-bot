@@ -257,8 +257,8 @@ class TaskClassifier:
                 return ModelTier.POWERFUL, "Vision with complex analysis/coding request"
             return ModelTier.BALANCED, "Vision understanding request"
 
-        # 2. Simple casual conversation or quick formatting
-        if word_count < 15 and SIMPLE_KEYWORDS.search(text) and not CODING_KEYWORDS.search(text):
+        # 2. Simple casual conversation or quick formatting (only if tools are NOT active)
+        if word_count < 15 and SIMPLE_KEYWORDS.search(text) and not CODING_KEYWORDS.search(text) and not tools_available:
             return ModelTier.FAST, "Casual chat or simple question"
 
         # 3. Complex coding, debugging, or system architecture
@@ -272,8 +272,8 @@ class TaskClassifier:
             return ModelTier.POWERFUL, "Deep analytical or long-form reasoning request"
 
         # 5. Moderate complexity / default
-        if word_count > 40 or reasoning_matches >= 1 or coding_matches >= 1:
-            return ModelTier.BALANCED, "Moderate task complexity"
+        if word_count > 40 or reasoning_matches >= 1 or coding_matches >= 1 or tools_available:
+            return ModelTier.BALANCED, "Moderate task complexity or tool execution active"
 
         return ModelTier.FAST, "Standard simple query"
 

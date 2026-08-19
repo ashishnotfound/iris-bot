@@ -20,21 +20,60 @@ COMPOSIO_BASE_URL = "https://backend.composio.dev/api/v3"
 
 # Keyword mapping to Composio toolkit slugs
 TOOLKIT_KEYWORD_MAP = {
+    # Gmail / Email
     "email": "gmail",
+    "emails": "gmail",
     "mail": "gmail",
     "gmail": "gmail",
+    "inbox": "gmail",
+    "unread": "gmail",
+    "message": "gmail",
+    "messages": "gmail",
+    "draft": "gmail",
     "send email": "gmail",
+    # Google Calendar
     "calendar": "googlecalendar",
+    "googlecalendar": "googlecalendar",
     "event": "googlecalendar",
+    "events": "googlecalendar",
     "schedule": "googlecalendar",
     "meeting": "googlecalendar",
+    "meetings": "googlecalendar",
+    "appointment": "googlecalendar",
+    "appointments": "googlecalendar",
+    "agenda": "googlecalendar",
+    "today": "googlecalendar",
+    # Instagram
     "instagram": "instagram",
     "insta": "instagram",
+    "ig": "instagram",
+    "follower": "instagram",
+    "followers": "instagram",
+    "following": "instagram",
+    "profile": "instagram",
     "post": "instagram",
+    "posts": "instagram",
+    "reels": "instagram",
+    "media": "instagram",
+    "comment": "instagram",
+    "comments": "instagram",
+    "caption": "instagram",
+    "insight": "instagram",
+    "insights": "instagram",
+    "dm": "instagram",
+    # Google Maps
     "maps": "google_maps",
     "location": "google_maps",
     "directions": "google_maps",
+    # Browsebase / Web Search / Browser
     "browse": "browserbase_tool",
+    "browser": "browserbase_tool",
+    "browserbase": "browserbase_tool",
+    "browserbase_tool": "browserbase_tool",
+    "browsebase": "browserbase_tool",
+    "scrape": "browserbase_tool",
+    "lookup": "browserbase_tool",
+    "website": "browserbase_tool",
     "web": "browserbase_tool",
 }
 
@@ -46,6 +85,23 @@ READ_ONLY_PATTERNS = [
 CONSEQUENTIAL_KEYWORDS = [
     "send", "delete", "create", "remove", "update", "modify", "patch", "post", "cancel", "purchase", "pay", "reply", "exec", "write"
 ]
+
+
+def _extract_toolkit_slug(acc: Dict[str, Any]) -> str:
+    """Robustly extract toolkit slug from connected account dict across API v3 structure variants."""
+    if isinstance(acc.get("toolkit"), dict):
+        slug = acc["toolkit"].get("slug")
+        if slug:
+            return str(slug).lower()
+    if isinstance(acc.get("app"), dict):
+        slug = acc["app"].get("slug")
+        if slug:
+            return str(slug).lower()
+    for k in ("toolkit_slug", "toolkit", "appName", "app_name", "appUniqueId", "app_id"):
+        val = acc.get(k)
+        if isinstance(val, str) and val.strip():
+            return val.strip().lower()
+    return ""
 
 
 def is_consequential_action(tool_name: str) -> bool:
@@ -87,6 +143,12 @@ def validate_tool_arguments(tool_name: str, arguments: Dict[str, Any]) -> Tuple[
 
 class ComposioClient:
     def __init__(self, api_key: Optional[str] = None):
+        if not os.environ.get("COMPOSIO_API_KEY"):
+            try:
+                from dotenv import load_dotenv
+                load_dotenv()
+            except ImportError:
+                pass
         self.api_key = (api_key or os.environ.get("COMPOSIO_API_KEY", "")).strip()
         self.headers = {
             "x-api-key": self.api_key,
@@ -158,18 +220,31 @@ class ComposioClient:
         if not accounts:
             return []
 
-        active_toolkits = {
-            (acc.get("toolkit", {}).get("slug") or "").lower() for acc in accounts
-        }
+        active_toolkits = set()
+        for acc in accounts:
+            slug = _extract_toolkit_slug(acc)
+            if slug:
+                active_toolkits.add(slug)
 
-        # Match intent keywords against active connected toolkits
         msg_lower = user_message.lower()
         target_toolkits = set()
         for kw, tk_slug in TOOLKIT_KEYWORD_MAP.items():
             if kw in msg_lower and tk_slug in active_toolkits:
                 target_toolkits.add(tk_slug)
 
-        # Only expose tools if specific intent keywords matched
+        # Check if toolkit slug itself is explicitly in user message
+        for tk in active_toolkits:
+            if tk in msg_lower:
+                target_toolkits.add(tk)
+
+        # Fallback catalog search if keyword match produced no toolkit
+        if not target_toolkits:
+            query_tools = self.get_tools_for_query(user_message, limit=10)
+            for qt in query_tools:
+                tk = (qt.get("toolkit", {}).get("slug") or qt.get("toolkit_slug") or "").lower()
+                if tk in active_toolkits:
+                    target_toolkits.add(tk)
+
         if not target_toolkits:
             return []
 
@@ -202,11 +277,13 @@ class ComposioClient:
                 "properties": input_params.get("properties", {}) if isinstance(input_params, dict) else {},
             }
 
+        full_desc = f"{description} (Note: Connected account tools automatically use the authenticated user's account. Optional ID parameters like ig_user_id, user_id, or calendar_id default to the connected account when omitted. Pass {{}} to query the user's connected account directly without asking for an ID.)"
+
         return {
             "type": "function",
             "function": {
                 "name": f"composio_{slug.lower()}",
-                "description": str(description)[:1024],
+                "description": full_desc[:1024],
                 "parameters": input_params,
             },
         }
