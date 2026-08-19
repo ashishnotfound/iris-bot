@@ -90,17 +90,6 @@ MODEL_CATALOG: List[ModelSpec] = [
         context_window=1000000,
         enabled=True,
     ),
-    ModelSpec(
-        provider="gemini",
-        model_id="gemini-2.5-flash",
-        tier=ModelTier.FAST,
-        free=True,
-        vision=True,
-        tools=True,
-        reasoning=False,
-        context_window=1000000,
-        enabled=True,
-    ),
 
     # ── OpenRouter (Free Models Catalog) ──
     ModelSpec(
@@ -289,7 +278,10 @@ class TaskRouter:
         Returns:
             RoutingDecision telemetry struct.
         """
-        active = set(active_providers or ["gemini", "openrouter", "nvidia"])
+        if active_providers is not None:
+            active = set(active_providers)
+        else:
+            active = {"gemini", "openrouter", "nvidia"}
 
         # ── 1. Check Manual Override ──
         if manual_model_override and manual_model_override.strip().lower() not in ("auto", ""):
@@ -375,6 +367,16 @@ class TaskRouter:
 
         sorted_specs = sorted(eligible, key=_sort_key)
         candidates = [(s.provider, s.model_id, s) for s in sorted_specs]
+
+        # Deduplicate candidates by (provider, model_id)
+        seen = set()
+        unique_candidates = []
+        for c in candidates:
+            key = (c[0], c[1])
+            if key not in seen:
+                seen.add(key)
+                unique_candidates.append(c)
+        candidates = unique_candidates
 
         logger.info(
             "TaskRouter: classified tier=%s reason=%r candidates=%s",

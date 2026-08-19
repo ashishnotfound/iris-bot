@@ -1,32 +1,32 @@
 """
 
-lib/hermes_runner.py â Hermes/Iris Agent Core Runner (Phase 2)
+lib/hermes_runner.py — Hermes/Iris Agent Core Runner (Phase 2)
 
 Full multi-modal agent turn loop:
 
-  â¢ Multi-provider LLM (Gemini â OpenRouter â NVIDIA NIM) with key-ring failover
+  • Multi-provider LLM (Gemini → OpenRouter → NVIDIA NIM) with key-ring failover
 
-  â¢ Voice message speech-to-text via Groq Whisper (free)
+  • Voice message speech-to-text via Groq Whisper (free)
 
-  â¢ Photo/image understanding via vision-capable LLM
+  • Photo/image understanding via vision-capable LLM
 
-  â¢ Image generation via Pollinations.ai (Flux, zero-key, free)
+  • Image generation via Pollinations.ai (Flux, zero-key, free)
 
-  â¢ Persistent memory (MEMORY.md + USER.md) via Supabase
+  • Persistent memory (MEMORY.md + USER.md) via Supabase
 
-  â¢ Composio v3 tool integration (1000+ app actions)
+  • Composio v3 tool integration (1000+ app actions)
 
-  â¢ Autonomous cron job management with retry + idempotency
+  • Autonomous cron job management with retry + idempotency
 
-  â¢ Natural-language automation creation
+  • Natural-language automation creation
 
-  â¢ Web/internet search (DuckDuckGo, no key)
+  • Web/internet search (DuckDuckGo, no key)
 
-  â¢ Amazon/Flipkart business intelligence snapshot
+  • Amazon/Flipkart business intelligence snapshot
 
-  â¢ Job status and cancellation
+  • Job status and cancellation
 
-  â¢ Full Telegram command center
+  • Full Telegram command center
 
 """
 
@@ -306,7 +306,7 @@ def _load_messages(chat_id: int, session_id: str, limit: int = 40) -> List[Dict[
 
                 content = row["content"]
 
-                # content is stored as JSONB â could be a string or a list
+                # content is stored as JSONB — could be a string or a list
 
                 if isinstance(content, str):
 
@@ -378,7 +378,7 @@ def _download_photo(tg: TelegramClient, photo_list: List[Dict[str, Any]]) -> Opt
 
         return None
 
-    # Telegram sends photo sizes sorted ascending â last is largest
+    # Telegram sends photo sizes sorted ascending — last is largest
 
     best = photo_list[-1]
 
@@ -670,7 +670,7 @@ def execute_agent_turn(
 
         logger.warning("Unauthorized chat_id: %s", chat_id)
 
-        telegram_client.send_message(chat_id, "â ï¸ Access denied. Your Telegram ID is not authorized.")
+        telegram_client.send_message(chat_id, "⚠️ Access denied. Your Telegram ID is not authorized.")
 
         return {"status": "unauthorized"}
 
@@ -684,7 +684,7 @@ def execute_agent_turn(
 
         return cmd_result
 
-    # 3. Voice message â STT â text
+    # 3. Voice message → STT → text
 
     voice_transcript: Optional[str] = None
 
@@ -724,7 +724,7 @@ def execute_agent_turn(
 
         else:
 
-            telegram_client.send_message(chat_id, "â ï¸ Failed to download voice message.")
+            telegram_client.send_message(chat_id, "⚠️ Failed to download voice message.")
 
             return {"status": "error", "error": "voice download failed"}
 
@@ -760,7 +760,7 @@ def execute_agent_turn(
 
     history = _load_messages(chat_id, session_id)
 
-    # 6. Load persistent memory â build system prompt
+    # 6. Load persistent memory → build system prompt
 
     mem = _memory.load(chat_id)
 
@@ -806,7 +806,7 @@ def execute_agent_turn(
 
     telegram_client.send_chat_action(chat_id, "typing")
 
-    # ââ Context Injection: Business Snapshot ââ
+    # ── Context Injection: Business Snapshot ──
 
     if _BUSINESS_PATTERNS.search(clean):
 
@@ -818,7 +818,7 @@ def execute_agent_turn(
 
             logger.debug("Injected business snapshot context for chat_id=%s", chat_id)
 
-    # ââ Context Injection: Web Search ââ
+    # ── Context Injection: Web Search ──
 
     if _WEB_SEARCH_PATTERNS.search(clean) and not is_vision:
 
@@ -876,13 +876,21 @@ def execute_agent_turn(
 
         )
 
-    except RuntimeError as e:
+    except (RuntimeError, Exception) as e:
 
-        err_msg = f"â ï¸ All AI providers failed:\n{e}"
+        logger.error("All AI providers failed for chat_id=%s: %s", chat_id, e)
 
-        telegram_client.send_message(chat_id, err_msg)
+        clean_user_msg = (
 
-        return {"status": "error", "error": str(e)}
+            "⚠️ Iris is temporarily unable to process this request because the AI service is unavailable. "
+
+            "Please try again in a moment."
+
+        )
+
+        telegram_client.send_message(chat_id, clean_user_msg)
+
+        return {"status": "error", "error": "AI service unavailable"}
 
     # 11. Mid-Task Escalation Check
 
@@ -1054,7 +1062,7 @@ def _handle_image_generation(
 
     else:
 
-        tg.send_message(chat_id, f"â ï¸ Image generation failed: {result.get('error')}")
+        tg.send_message(chat_id, f"⚠️ Image generation failed: {result.get('error')}")
 
         return {"status": "error", "error": result.get("error")}
 
@@ -1093,13 +1101,13 @@ def _handle_command(
 
         avail = ", ".join(_registry.available_providers()) or "none configured"
 
-        stt_status = "â Ready (Groq Whisper)" if _stt.is_configured() else "â ï¸ GROQ_API_KEY missing"
+        stt_status = "✅ Ready (Groq Whisper)" if _stt.is_configured() else "⚠️ GROQ_API_KEY missing"
 
-        mem_status = "â Supabase" if _memory.is_configured() else "â ï¸ in-process only"
+        mem_status = "✅ Supabase" if _memory.is_configured() else "⚠️ in-process only"
 
         msg = (
 
-            "ð¤ *Iris â Personal AI Agent*\n\n"
+            "🤖 *Iris — Personal AI Agent*\n\n"
 
             f"ð§  *LLM Providers:* `{avail}`\n"
 
@@ -1111,27 +1119,27 @@ def _handle_command(
 
             "ð *Commands:*\n"
 
-            "â¢ `/image <prompt>` â Generate AI image\n"
+            "• `/image <prompt>` — Generate AI image\n"
 
-            "â¢ `/models` â List available free LLM models\n"
+            "• `/models` — List available free LLM models\n"
 
-            "â¢ `/model auto` â Enable dynamic task routing\n"
+            "• `/model auto` — Enable dynamic task routing\n"
 
-            "â¢ `/model <name>` â Override active model\n"
+            "• `/model <name>` — Override active model\n"
 
-            "â¢ `/memory` â View stored memory\n"
+            "• `/memory` — View stored memory\n"
 
-            "â¢ `/forget` â Clear stored memory\n"
+            "• `/forget` — Clear stored memory\n"
 
-            "â¢ `/tools` â List Composio connected tools\n"
+            "• `/tools` — List Composio connected tools\n"
 
-            "â¢ `/status` â System status & router telemetry\n"
+            "• `/status` — System status & router telemetry\n"
 
-            "â¢ `/cron list` â List scheduled jobs\n"
+            "• `/cron list` — List scheduled jobs\n"
 
-            "â¢ `/cron add <expr> <task>` â Add cron job\n"
+            "• `/cron add <expr> <task>` — Add cron job\n"
 
-            "â¢ `/cron del <job_id>` â Delete cron job\n\n"
+            "• `/cron del <job_id>` — Delete cron job\n\n"
 
             "ð¬ Just send any message, image, or voice note to chat!"
 
@@ -1163,7 +1171,7 @@ def _handle_command(
 
         current_override = _get_session_model(chat_id)
 
-        mode_str = "â¡ Auto (Dynamic Task Router)" if current_override == "auto" else f"ð Manual Override (`{current_override}`)"
+        mode_str = "⚡ Auto (Dynamic Task Router)" if current_override == "auto" else f"📌 Manual Override (`{current_override}`)"
 
         telem = _last_routing_telemetry.get(chat_id, {})
 
@@ -1183,7 +1191,7 @@ def _handle_command(
 
             f"ð¯ *Routing Mode:* {mode_str}\n"
 
-            f"â¡ *Last Tier Used:* `{last_tier}` ({last_prov} / `{last_model}`)\n"
+            f"⚡ *Last Tier Used:* `{last_tier}` ({last_prov} / `{last_model}`)\n"
 
             f"ð *Last Routing Reason:* _{last_reason}_\n"
 
@@ -1191,13 +1199,13 @@ def _handle_command(
 
             f"ð§  *Available Providers:* {', '.join(avail) or 'none'}\n"
 
-            f"ð¤ *Groq STT:* {'â' if _stt.is_configured() else 'â GROQ_API_KEY missing'}\n"
+            f"🎤 *Groq STT:* {'✅' if _stt.is_configured() else '❌ GROQ_API_KEY missing'}\n"
 
-            f"ð¾ *Memory:* {'Loaded â' if has_mem else 'Empty'}\n"
+            f"💾 *Memory:* {'Loaded ✅' if has_mem else 'Empty'}\n"
 
             f"ð *Composio Tools:* `{tools_summary}`\n"
 
-            f"ð¼ *Image Gen:* Pollinations.ai (Flux) â\n"
+            f"🖼 *Image Gen:* Pollinations.ai (Flux) ✅\n"
 
         )
 
@@ -1219,23 +1227,23 @@ def _handle_command(
 
         pow_specs = [s for s in MODEL_CATALOG if s.tier == ModelTier.POWERFUL]
 
-        lines.append("â¡ *FAST Tiers (Simple Q&A / Quick Chat):*")
+        lines.append("⚡ *FAST Tiers (Simple Q&A / Quick Chat):*")
 
         for s in fast_specs:
 
-            lines.append(f"  â¢ `{s.provider}` / `{s.model_id}`")
+            lines.append(f"  • `{s.provider}` / `{s.model_id}`")
 
-        lines.append("\nâï¸ *BALANCED Tiers (Research / Summaries / Chat):*")
+        lines.append("\n⚖️ *BALANCED Tiers (Research / Summaries / Chat):*")
 
         for s in bal_specs:
 
-            lines.append(f"  â¢ `{s.provider}` / `{s.model_id}`")
+            lines.append(f"  • `{s.provider}` / `{s.model_id}`")
 
         lines.append("\nð§  *POWERFUL Tiers (Coding / Architecture / Debugging):*")
 
         for s in pow_specs:
 
-            lines.append(f"  â¢ `{s.provider}` / `{s.model_id}`")
+            lines.append(f"  • `{s.provider}` / `{s.model_id}`")
 
         lines.append("\nð¡ Use `/model auto` for automatic task routing, or `/model <model-id>` to pin.")
 
@@ -1257,9 +1265,9 @@ def _handle_command(
 
                 f"ð *Current Model Mode:* `{curr}`\n\n"
 
-                "â¢ `/model auto` â Enable dynamic task routing (recommended)\n"
+                "• `/model auto` — Enable dynamic task routing (recommended)\n"
 
-                "â¢ `/model <model-id>` â Pin a specific model\n"
+                "• `/model <model-id>` — Pin a specific model\n"
 
                 "  Example: `/model gemini-2.5-flash`",
 
@@ -1279,7 +1287,7 @@ def _handle_command(
 
                     chat_id,
 
-                    "â *Dynamic Task Routing Enabled* (`auto` mode).\n"
+                    "✅ *Dynamic Task Routing Enabled* (`auto` mode).\n"
 
                     "Iris will now select the best model engine for each task automatically.",
 
@@ -1345,7 +1353,7 @@ def _handle_command(
 
         if not composio.is_configured():
 
-            tg.send_message(chat_id, "â ï¸ Composio not configured. Set COMPOSIO_API_KEY.")
+            tg.send_message(chat_id, "⚠️ Composio not configured. Set COMPOSIO_API_KEY.")
 
         else:
 
@@ -1365,7 +1373,7 @@ def _handle_command(
 
                     status = acc.get("status", "?")
 
-                    lines.append(f"  â¢ `{slug}` â {status}")
+                    lines.append(f"  • `{slug}` — {status}")
 
                 tg.send_message(chat_id, "\n".join(lines), parse_mode="Markdown")
 
@@ -1381,15 +1389,15 @@ def _handle_command(
 
                 chat_id,
 
-                "â° *Cron Job Manager*\n\n"
+                "⏰ *Cron Job Manager*\n\n"
 
-                "â¢ `/cron list` â View scheduled jobs\n"
+                "• `/cron list` — View scheduled jobs\n"
 
-                "â¢ `/cron add <expr> <task>` â Add job\n"
+                "• `/cron add <expr> <task>` — Add job\n"
 
                 "  Example: `/cron add 0 9 * * * Send me the weather forecast`\n"
 
-                "â¢ `/cron del <job_id>` â Remove a job",
+                "• `/cron del <job_id>` — Remove a job",
 
                 parse_mode="Markdown",
 
@@ -1409,17 +1417,17 @@ def _handle_command(
 
             else:
 
-                lines = ["â° *Scheduled Jobs:*\n"]
+                lines = ["⏰ *Scheduled Jobs:*\n"]
 
                 for j in jobs:
 
-                    status_icon = "â" if j.get("enabled") else "â¸"
+                    status_icon = "✅" if j.get("enabled") else "⏸"
 
                     jid = str(j["job_id"])[:8]
 
                     lines.append(
 
-                        f"{status_icon} `{jid}` â `{j['cron_expression']}`\n"
+                        f"{status_icon} `{jid}` — `{j['cron_expression']}`\n"
 
                         f"   _{j['task_description'][:80]}_"
 
@@ -1445,7 +1453,7 @@ def _handle_command(
 
                     chat_id,
 
-                    "â ï¸ Usage: `/cron add <min> <hr> <day> <mon> <dow> <task>`\n"
+                    "⚠️ Usage: `/cron add <min> <hr> <day> <mon> <dow> <task>`\n"
 
                     "Example: `/cron add 0 9 * * * Daily morning briefing`",
 
@@ -1463,11 +1471,11 @@ def _handle_command(
 
                 if ok:
 
-                    tg.send_message(chat_id, f"â Cron job added!\nâ° `{cron_expr}`\nð _{task_desc}_", parse_mode="Markdown")
+                    tg.send_message(chat_id, f"✅ Cron job added!\n⏰ `{cron_expr}`\n📝 _{task_desc}_", parse_mode="Markdown")
 
                 else:
 
-                    tg.send_message(chat_id, "â ï¸ Failed to add cron job. Check that Supabase is configured.")
+                    tg.send_message(chat_id, "⚠️ Failed to add cron job. Check that Supabase is configured.")
 
             return {"status": "success", "command": "cron_add"}
 
@@ -1489,11 +1497,11 @@ def _handle_command(
 
                 if not matched:
 
-                    tg.send_message(chat_id, f"â ï¸ No job found with ID starting with `{job_id}`.", parse_mode="Markdown")
+                    tg.send_message(chat_id, f"⚠️ No job found with ID starting with `{job_id}`.", parse_mode="Markdown")
 
                 elif len(matched) > 1:
 
-                    tg.send_message(chat_id, "â ï¸ Multiple jobs match that prefix. Please be more specific.")
+                    tg.send_message(chat_id, "⚠️ Multiple jobs match that prefix. Please be more specific.")
 
                 else:
 
@@ -1507,7 +1515,7 @@ def _handle_command(
 
                     else:
 
-                        tg.send_message(chat_id, "â ï¸ Failed to delete cron job.")
+                        tg.send_message(chat_id, "⚠️ Failed to delete cron job.")
 
             return {"status": "success", "command": "cron_del"}
 

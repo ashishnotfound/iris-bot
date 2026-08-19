@@ -114,11 +114,23 @@ class _KeyRingMixin:
     def _key_env_names(self) -> List[str]:
         raise NotImplementedError
 
+    def _clean_key(self, raw_val: str) -> Optional[str]:
+        if not raw_val:
+            return None
+        val = raw_val.strip().strip("'\"")
+        val_lower = val.lower()
+        if not val or val_lower in (
+            "none", "null", "undefined", "your_api_key_here",
+            "replace_with_valid_aiza_key", "your_key_here", ""
+        ) or val_lower.startswith("replace_with_") or val_lower.startswith("your_"):
+            return None
+        return val
+
     def _load_keys(self) -> List[str]:
         keys: List[str] = []
         for name in self._key_env_names():
-            k = os.environ.get(name, "").strip()
-            if k:
+            k = self._clean_key(os.environ.get(name, ""))
+            if k and k not in keys:
                 keys.append(k)
         return keys
 
@@ -143,16 +155,22 @@ class _KeyRingMixin:
         self._key_index = (self._key_index + 1) % len(active)
         return key
 
-    def _is_quota_error(self, e: Exception) -> bool:
+    def _is_key_or_quota_error(self, e: Exception) -> bool:
         err_str = str(e).lower()
         status = getattr(getattr(e, "response", None), "status_code", None)
-        return status in (429, 402) or any(
+        if status in (400, 401, 402, 403, 429):
+            return True
+        return any(
             w in err_str
             for w in (
                 "rate limit", "insufficient", "credits", "quota",
                 "resource_exhausted", "exhausted", "too many requests",
+                "invalid api key", "invalid_api_key", "please pass a valid api key",
+                "missing authentication header", "unauthorized", "authentication",
             )
         )
+
+    _is_quota_error = _is_key_or_quota_error
 
 
 # ---------------------------------------------------------------------------
@@ -181,18 +199,16 @@ class GeminiProvider(LLMProvider, _KeyRingMixin):
     def _load_keys(self) -> List[str]:
         keys: List[str] = []
         for name in self._key_env_names():
-            k = os.environ.get(name, "").strip()
-            if k:
-                # Warn if key doesn't look like a valid Google AI Studio key
-                if not k.startswith("AIza"):
+            cleaned = self._clean_key(os.environ.get(name, ""))
+            if cleaned:
+                if not cleaned.startswith("AIza"):
                     logger.warning(
-                        "GeminiProvider: %s value %r does not start with 'AIza'. "
-                        "Google AI Studio keys must start with 'AIza'. "
-                        "Get a valid key at https://aistudio.google.com/app/apikey",
+                        "GeminiProvider: %s value does not start with 'AIza'. Skipping invalid key format.",
                         name,
-                        k[:12] + "...",
                     )
-                keys.append(k)
+                    continue
+                if cleaned not in keys:
+                    keys.append(cleaned)
         return keys
 
     def _key_env_names(self) -> List[str]:
@@ -243,7 +259,7 @@ class GeminiProvider(LLMProvider, _KeyRingMixin):
                 )
                 return resp.choices[0].message.content or ""
             except Exception as e:
-                if self._is_quota_error(e):
+                if self._is_key_or_quota_error(e):
                     self._mark_exhausted(key)
                     last_error = e
                     continue
@@ -326,7 +342,7 @@ class OpenRouterProvider(LLMProvider, _KeyRingMixin):
                 )
                 return resp.choices[0].message.content or ""
             except Exception as e:
-                if self._is_quota_error(e):
+                if self._is_key_or_quota_error(e):
                     self._mark_exhausted(key)
                     last_error = e
                     continue
@@ -432,7 +448,7 @@ class NvidiaProvider(LLMProvider, _KeyRingMixin):
                 )
                 return resp.choices[0].message.content or ""
             except Exception as e:
-                if self._is_quota_error(e):
+                if self._is_key_or_quota_error(e):
                     self._mark_exhausted(key)
                     last_error = e
                     continue
