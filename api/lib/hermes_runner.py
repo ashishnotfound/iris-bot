@@ -690,9 +690,17 @@ def execute_agent_turn(
 
         return {"status": "unauthorized"}
 
-    # 2. Route to command handler first
+    clean = (user_message or "").strip()
 
-    clean = user_message.strip()
+    if not clean and not photo and not voice:
+
+        greeting = "Hello! How can I help you today?"
+
+        telegram_client.send_message(chat_id, greeting)
+
+        return {"status": "success", "reply": greeting}
+
+    # 2. Route to command handler first
 
     cmd_result = _handle_command(chat_id, clean, telegram_client)
 
@@ -1194,6 +1202,10 @@ def execute_agent_turn(
     _save_message(chat_id, session_id, "assistant", reply)
 
     # 13. Send reply
+
+    if not reply or not str(reply).strip():
+
+        reply = "I've processed your request."
 
     telegram_client.send_message(chat_id, reply)
 

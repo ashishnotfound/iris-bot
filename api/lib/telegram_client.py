@@ -68,6 +68,10 @@ class TelegramClient:
         """
         url = f"{self.base_url}/sendMessage"
 
+        text = str(text or "").strip()
+        if not text:
+            text = "I've processed your request."
+
         # Truncate if necessary
         if len(text) > _MAX_MESSAGE_LEN:
             text = text[:_MAX_MESSAGE_LEN - 20] + "\n\n…[truncated]"
