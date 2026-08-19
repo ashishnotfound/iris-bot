@@ -396,9 +396,9 @@ class TaskRouter:
         prov_weights = {"openrouter": 0, "nvidia": 1, "groq": 2, "gemini": 3}
 
         def _sort_key(spec: ModelSpec) -> Tuple[int, int]:
-            tier_dist = tier_weights[target_tier].get(spec.tier, 9)
             prov_dist = prov_weights.get(spec.provider, 9)
-            return (tier_dist, prov_dist)
+            tier_dist = tier_weights[target_tier].get(spec.tier, 9)
+            return (prov_dist, tier_dist)
 
         sorted_specs = sorted(eligible, key=_sort_key)
         candidates = [(s.provider, s.model_id, s) for s in sorted_specs]
