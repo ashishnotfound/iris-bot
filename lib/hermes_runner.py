@@ -318,9 +318,29 @@ def _load_messages(chat_id: int, session_id: str, limit: int = 40) -> List[Dict[
 
     return _local_load_messages(chat_id, session_id, limit)
 
+def _sanitize_content_for_history(content: Any) -> Any:
+    """Sanitize content for persistent history storage (replace raw base64 data URLs with text markers)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        text_parts = []
+        has_image = False
+        for part in content:
+            if isinstance(part, dict):
+                if part.get("type") == "text":
+                    text_parts.append(part.get("text", ""))
+                elif part.get("type") == "image_url":
+                    has_image = True
+        base_text = " ".join(text_parts).strip()
+        if has_image:
+            return f"{base_text}\n[attached image]" if base_text else "[attached image]"
+        return base_text if base_text else str(content)
+    return str(content)
+
 def _save_message(chat_id: int, session_id: str, role: str, content: Any) -> None:
     """Persist a single message to local SQLite storage and Supabase."""
-    _local_save_message(chat_id, session_id, role, content)
+    sanitized = _sanitize_content_for_history(content)
+    _local_save_message(chat_id, session_id, role, sanitized)
 
     base = _supabase_url()
     if not base or session_id.startswith("local"):
@@ -334,7 +354,7 @@ def _save_message(chat_id: int, session_id: str, role: str, content: Any) -> Non
                 "chat_id": chat_id,
                 "session_id": session_id,
                 "role": role,
-                "content": content,
+                "content": sanitized,
             },
             timeout=6,
         )
