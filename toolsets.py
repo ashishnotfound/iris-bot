@@ -89,6 +89,9 @@ _HERMES_CORE_TOOLS = [
     "kanban_attach", "kanban_attach_url", "kanban_attachments",
     # Computer use (macOS, gated on cua-driver being installed via check_fn)
     "computer_use",
+    # Amazon & Flipkart Seller integrations (gated on seller credentials via check_fn)
+    "seller_get_orders", "seller_get_inventory", "seller_get_sales",
+    "seller_check_health", "seller_get_attention_needed",
 ]
 
 # Webhook events may originate from untrusted third-party content (for example,
@@ -106,6 +109,18 @@ _HERMES_WEBHOOK_SAFE_TOOLS = [
 # These can include individual tools or reference other toolsets
 TOOLSETS = {
     # Basic toolsets - individual tool categories
+    "seller": {
+        "description": "Amazon Seller + Flipkart Seller integration tools for live orders, inventory, sales, and health diagnostic queries.",
+        "tools": [
+            "seller_get_orders",
+            "seller_get_inventory",
+            "seller_get_sales",
+            "seller_check_health",
+            "seller_get_attention_needed",
+        ],
+        "includes": [],
+    },
+
     "web": {
         "description": "Web research and content extraction tools",
         "tools": ["web_search", "web_extract"],

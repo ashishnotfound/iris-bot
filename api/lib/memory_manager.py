@@ -181,16 +181,22 @@ class MemoryManager:
         try:
             raw = llm_callable(prompt)
             import json
-            # Strip any accidental markdown code fences
-            raw = raw.strip()
-            if raw.startswith("```"):
-                raw = raw.split("```")[1]
-                if raw.startswith("json"):
-                    raw = raw[4:]
+            import re
+            # Strip any accidental markdown code fences (handles ```json, ```, etc.)
+            raw = re.sub(
+                r'^```(?:json)?\s*',  # opening fence with optional language tag
+                '',
+                raw.strip(),
+                flags=re.MULTILINE,
+            )
+            raw = re.sub(r'```\s*$', '', raw, flags=re.MULTILINE)
             raw = raw.strip()
             data = json.loads(raw)
             new_memory = data.get("memory_md", memory_md)
             new_user = data.get("user_md", user_md)
+        except json.JSONDecodeError as e:
+            logger.warning("Memory extraction: LLM returned invalid JSON (non-critical): %s", e)
+            return memory_md, user_md
         except Exception as e:
             logger.warning("Memory extraction failed (non-critical): %s", e)
             return memory_md, user_md
