@@ -55,27 +55,41 @@ class TelegramClient:
             logger.error("Telegram getMe error: %s", e)
             return {"ok": False, "error": str(e)}
 
-    def send_message(
+    @staticmethod
+    def _chunk_text(text: str, max_len: int = 3900) -> list[str]:
+        """Split a long string into chunks of at most max_len chars on line/paragraph boundaries."""
+        if len(text) <= max_len:
+            return [text]
+
+        chunks = []
+        remaining = text
+        while remaining:
+            if len(remaining) <= max_len:
+                chunks.append(remaining)
+                break
+
+            split_idx = remaining.rfind("\n\n", 0, max_len)
+            if split_idx == -1 or split_idx < max_len // 2:
+                split_idx = remaining.rfind("\n", 0, max_len)
+            if split_idx == -1 or split_idx < max_len // 2:
+                split_idx = remaining.rfind(" ", 0, max_len)
+            if split_idx == -1:
+                split_idx = max_len
+
+            chunk = remaining[:split_idx].strip()
+            if chunk:
+                chunks.append(chunk)
+            remaining = remaining[split_idx:].strip()
+
+        return chunks if chunks else [text[:max_len]]
+
+    def _send_single_message(
         self,
         chat_id: int | str,
         text: str,
         parse_mode: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Send a text message to a Telegram chat.
-
-        Automatically truncates messages that exceed Telegram's 4096-char
-        limit and falls back to plain text if Markdown rendering fails.
-        """
         url = f"{self.base_url}/sendMessage"
-
-        text = str(text or "").strip()
-        if not text:
-            text = "I'm here! How can I help you today?"
-
-        # Truncate if necessary
-        if len(text) > _MAX_MESSAGE_LEN:
-            text = text[:_MAX_MESSAGE_LEN - 20] + "\n\n…[truncated]"
-
         payload: Dict[str, Any] = {"chat_id": chat_id, "text": text}
         if parse_mode:
             payload["parse_mode"] = parse_mode
@@ -90,18 +104,38 @@ class TelegramClient:
                     data.get("description", str(data)),
                 )
                 if parse_mode:
-                    # Markdown rendering failed — retry with plain text
                     plain_text = _strip_markdown(text)
                     plain_payload = {"chat_id": chat_id, "text": plain_text}
                     r2 = requests.post(url, json=plain_payload, timeout=15)
-                    data2 = r2.json()
-                    if not data2.get("ok"):
-                        logger.error("Telegram plain text retry failed (chat_id=%s): %s", chat_id, data2.get("description", str(data2)))
-                    return data2
+                    return r2.json()
             return data
         except Exception as e:
             logger.error("Telegram sendMessage error: %s", e)
             return {"ok": False, "error": str(e)}
+
+    def send_message(
+        self,
+        chat_id: int | str,
+        text: str,
+        parse_mode: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Send a text message to a Telegram chat.
+
+        Automatically splits long messages (>4096 chars) into consecutive parts
+        and falls back to plain text if Markdown rendering fails.
+        """
+        text = str(text or "").strip()
+        if not text:
+            text = "I'm here! How can I help you today?"
+
+        chunks = self._chunk_text(text, max_len=3900)
+        last_res = {"ok": True}
+        for idx, chunk in enumerate(chunks, 1):
+            prefix = f"[{idx}/{len(chunks)}]\n" if len(chunks) > 1 else ""
+            res = self._send_single_message(chat_id, f"{prefix}{chunk}", parse_mode=parse_mode)
+            if res.get("ok"):
+                last_res = res
+        return last_res
 
     def send_photo(
         self,
