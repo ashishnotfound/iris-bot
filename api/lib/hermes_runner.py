@@ -40,6 +40,9 @@ import os
 
 import re
 
+import requests
+
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from lib.auth import is_allowed
@@ -141,239 +144,202 @@ def _supabase_url() -> str:
 
     return os.environ.get("SUPABASE_URL", "").rstrip("/")
 
+def _local_sqlite_db_path() -> Path:
+    from hermes_constants import get_hermes_home
+    home = get_hermes_home()
+    home.mkdir(parents=True, exist_ok=True)
+    return home / "state.db"
+
+def _init_local_db():
+    try:
+        db_path = _local_sqlite_db_path()
+        import sqlite3
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS local_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_local_msg_chat_sess ON local_messages(chat_id, session_id)")
+            conn.commit()
+    except Exception as e:
+        logger.warning("Failed to initialize local message SQLite DB: %s", e)
+
+def _local_load_messages(chat_id: Any, session_id: str, limit: int = 40) -> List[Dict[str, Any]]:
+    try:
+        _init_local_db()
+        db_path = _local_sqlite_db_path()
+        import sqlite3
+        with sqlite3.connect(str(db_path)) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT role, content FROM (
+                    SELECT role, content, id FROM local_messages
+                    WHERE chat_id = ? AND session_id = ?
+                    ORDER BY id DESC LIMIT ?
+                ) ORDER BY id ASC
+                """,
+                (str(chat_id), str(session_id), limit)
+            )
+            rows = cursor.fetchall()
+            msgs = []
+            for role, raw_content in rows:
+                try:
+                    content = json.loads(raw_content)
+                except Exception:
+                    content = raw_content
+                msgs.append({"role": role, "content": content})
+            return msgs
+    except Exception as e:
+        logger.warning("Local SQLite message load failed: %s", e)
+        return []
+
+def _local_save_message(chat_id: Any, session_id: str, role: str, content: Any) -> None:
+    try:
+        _init_local_db()
+        db_path = _local_sqlite_db_path()
+        import sqlite3
+        val = json.dumps(content) if not isinstance(content, str) else content
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.execute(
+                "INSERT INTO local_messages (chat_id, session_id, role, content) VALUES (?, ?, ?, ?)",
+                (str(chat_id), str(session_id), str(role), val)
+            )
+            conn.commit()
+    except Exception as e:
+        logger.warning("Local SQLite message save failed: %s", e)
+
 def _ensure_session(chat_id: int, model: str = "auto") -> str:
-
     """Get or create a session_id for a chat. Returns session_id."""
-
-    import requests
-
     base = _supabase_url()
-
+    fallback_sid = f"local_{chat_id}"
     if not base:
-
-        return "local"
+        return fallback_sid
 
     try:
-
         r = requests.get(
-
             f"{base}/rest/v1/sessions",
-
             headers=_supabase_headers(),
-
             params={"chat_id": f"eq.{chat_id}", "select": "session_id"},
-
             timeout=6,
-
         )
-
         if r.status_code == 200 and r.json():
-
             return r.json()[0]["session_id"]
 
         # Create new session
-
         import uuid
-
         sid = str(uuid.uuid4())
-
         requests.post(
-
             f"{base}/rest/v1/sessions",
-
             headers={**_supabase_headers(), "Prefer": "resolution=merge-duplicates"},
-
             json={"chat_id": chat_id, "session_id": sid, "model": model, "platform": "telegram"},
-
             timeout=6,
-
         )
-
         return sid
-
     except Exception as e:
-
         logger.warning("Session lookup failed: %s", e)
-
-        return "local"
+        return fallback_sid
 
 def _get_session_model(chat_id: int) -> str:
-
     """Fetch session model override (default 'auto')."""
-
     import requests
-
     base = _supabase_url()
-
     if not base:
-
         return "auto"
 
     try:
-
         r = requests.get(
-
             f"{base}/rest/v1/sessions",
-
             headers=_supabase_headers(),
-
             params={"chat_id": f"eq.{chat_id}", "select": "model"},
-
             timeout=6,
-
         )
-
         if r.status_code == 200 and r.json():
-
             return r.json()[0].get("model") or "auto"
-
     except Exception as e:
-
         logger.warning("Session model lookup failed: %s", e)
-
     return "auto"
 
 def _set_session_model(chat_id: int, model: str) -> bool:
-
     """Update session model override in Supabase."""
-
     import requests
-
     base = _supabase_url()
-
     if not base:
-
         return False
 
     try:
-
         r = requests.patch(
-
             f"{base}/rest/v1/sessions",
-
             headers=_supabase_headers(),
-
             params={"chat_id": f"eq.{chat_id}"},
-
             json={"model": model},
-
             timeout=6,
-
         )
-
         return r.status_code in (200, 204)
-
     except Exception as e:
-
         logger.error("Set session model failed: %s", e)
-
         return False
 
 def _load_messages(chat_id: int, session_id: str, limit: int = 40) -> List[Dict[str, Any]]:
-
-    """Load recent conversation history from Supabase."""
-
-    import requests
-
+    """Load recent conversation history from Supabase or local SQLite fallback."""
     base = _supabase_url()
-
-    if not base or session_id == "local":
-
-        return []
+    if not base or session_id.startswith("local"):
+        return _local_load_messages(chat_id, session_id, limit)
 
     try:
-
         r = requests.get(
-
             f"{base}/rest/v1/messages",
-
             headers=_supabase_headers(),
-
             params={
-
                 "chat_id": f"eq.{chat_id}",
-
                 "session_id": f"eq.{session_id}",
-
                 "select": "role,content,metadata",
-
                 "order": "created_at.asc",
-
                 "limit": limit,
-
             },
-
             timeout=6,
-
         )
-
         if r.status_code == 200:
-
             rows = r.json()
-
-            msgs = []
-
-            for row in rows:
-
-                content = row["content"]
-
-                # content is stored as JSONB — could be a string or a list
-
-                if isinstance(content, str):
-
+            if rows:
+                msgs = []
+                for row in rows:
+                    content = row["content"]
                     msgs.append({"role": row["role"], "content": content})
-
-                else:
-
-                    msgs.append({"role": row["role"], "content": content})
-
-            return msgs
-
+                return msgs
     except Exception as e:
+        logger.warning("Failed to load messages from Supabase: %s", e)
 
-        logger.warning("Failed to load messages: %s", e)
-
-    return []
+    return _local_load_messages(chat_id, session_id, limit)
 
 def _save_message(chat_id: int, session_id: str, role: str, content: Any) -> None:
-
-    """Persist a single message to Supabase."""
-
-    import requests
+    """Persist a single message to local SQLite storage and Supabase."""
+    _local_save_message(chat_id, session_id, role, content)
 
     base = _supabase_url()
-
-    if not base or session_id == "local":
-
+    if not base or session_id.startswith("local"):
         return
 
     try:
-
         requests.post(
-
             f"{base}/rest/v1/messages",
-
             headers=_supabase_headers(),
-
             json={
-
                 "chat_id": chat_id,
-
                 "session_id": session_id,
-
                 "role": role,
-
                 "content": content,
-
             },
-
             timeout=6,
-
         )
-
     except Exception as e:
-
-        logger.warning("Failed to save message: %s", e)
+        logger.warning("Failed to save message to Supabase: %s", e)
 
 # ---------------------------------------------------------------------------
 

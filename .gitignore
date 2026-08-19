@@ -5,6 +5,7 @@
 /.hermes-runtime/
 /_pycache/
 *.pyc*
+*.db
 __pycache__/
 act/
 .act-sandbox-agent.*
