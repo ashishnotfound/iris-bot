@@ -70,6 +70,9 @@ class handler(BaseHTTPRequestHandler):
             self._send_json(200, {"status": "skipped", "reason": "already_processed"})
             return
 
+        # Send HTTP 200 OK immediately to Telegram so Telegram never times out (5s limit)
+        self._send_json(200, {"status": "processing", "update_id": update_id})
+
         try:
             result = execute_agent_turn(
                 chat_id=chat_id,
@@ -79,10 +82,8 @@ class handler(BaseHTTPRequestHandler):
             )
             if update_id and result.get("status") in ("success", "cancelled", "expired", "error"):
                 _mark_update_processed(update_id, chat_id)
-            self._send_json(200, result)
         except Exception as e:
-            logger.error("Webhook processing failed: %s", e, exc_info=True)
-            self._send_json(500, {"status": "error", "error": str(e)})
+            logger.error("Webhook processing failed for update_id=%s: %s", update_id, e, exc_info=True)
 
     def do_GET(self):
         self._send_json(200, {"status": "ok", "service": "Iris Telegram Webhook"})
