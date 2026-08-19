@@ -169,9 +169,9 @@ class ComposioClient:
             if kw in msg_lower and tk_slug in active_toolkits:
                 target_toolkits.add(tk_slug)
 
-        # If no specific keyword matched, expose tools from all connected toolkits (up to 3)
+        # Only expose tools if specific intent keywords matched
         if not target_toolkits:
-            target_toolkits = set(list(active_toolkits)[:3])
+            return []
 
         tool_defs: List[Dict[str, Any]] = []
         for tk in target_toolkits:
