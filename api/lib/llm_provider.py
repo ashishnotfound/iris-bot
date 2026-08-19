@@ -43,17 +43,20 @@ logger = logging.getLogger(__name__)
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
 NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 
 DEFAULT_MODELS: Dict[str, str] = {
     "openrouter": "google/gemma-4-31b-it:free",
+    "nvidia": "meta/llama-3.1-8b-instruct",
+    "groq": "llama-3.3-70b-versatile",
     "gemini": "gemini-2.5-flash",
-    "nvidia": "meta/llama-3.1-405b-instruct",
 }
 
 VISION_MODELS: Dict[str, str] = {
     "openrouter": "google/gemma-4-31b-it:free",
+    "nvidia": "meta/llama-3.2-90b-vision-instruct",
+    "groq": "llama-3.2-11b-vision-preview",
     "gemini": "gemini-2.5-flash",
-    "nvidia": "microsoft/phi-3-vision-128k-instruct",
 }
 
 # How long to back off an exhausted key (seconds)
@@ -462,6 +465,83 @@ class NvidiaProvider(LLMProvider, _KeyRingMixin):
 # ---------------------------------------------------------------------------
 
 
+
+# ---------------------------------------------------------------------------
+# Groq Cloud Provider — ultra-fast LLM & Vision
+# ---------------------------------------------------------------------------
+
+
+class GroqProvider(LLMProvider, _KeyRingMixin):
+    """Groq Cloud via OpenAI-compatible endpoint (free tier, ultra-fast & vision).
+
+    Keys are read from:
+      GROQ_API_KEY      — primary key
+      GROQ_API_KEY_2    — second key
+      ...
+      GROQ_API_KEY_9    — ninth key
+    """
+
+    def __init__(self) -> None:
+        self._exhausted_until: Dict[str, float] = {}
+        self._key_index = 0
+        self._keys = self._load_keys()
+
+    def _key_env_names(self) -> List[str]:
+        names = ["GROQ_API_KEY"]
+        for i in range(2, 10):
+            names.append(f"GROQ_API_KEY_{i}")
+        return names
+
+    @property
+    def name(self) -> str:
+        return "groq"
+
+    def is_available(self) -> bool:
+        self._keys = self._load_keys()
+        return bool(self._active_keys(self._keys))
+
+    def chat_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        *,
+        model: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        vision: bool = False,
+    ) -> str:
+        self._keys = self._load_keys()
+        active = self._active_keys(self._keys)
+        if not active:
+            raise LLMKeyExhaustedError("All Groq keys are exhausted or unconfigured.")
+
+        try:
+            from openai import OpenAI
+        except ImportError:
+            raise RuntimeError("openai package not installed.")
+
+        use_model = model or (VISION_MODELS["groq"] if vision else DEFAULT_MODELS["groq"])
+        last_error: Optional[Exception] = None
+
+        for key in list(active):
+            try:
+                client = OpenAI(base_url=GROQ_BASE_URL, api_key=key)
+                resp = client.chat.completions.create(
+                    model=use_model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                return resp.choices[0].message.content or ""
+            except Exception as e:
+                if self._is_key_or_quota_error(e):
+                    self._mark_exhausted(key)
+                    last_error = e
+                    continue
+                raise RuntimeError(f"Groq API error: {e}") from e
+
+        raise LLMKeyExhaustedError(f"All Groq keys failed. Last: {last_error}")
+
+
 class ProviderRegistry:
     """Manages multiple LLM providers and executes ordered failover.
 
@@ -469,13 +549,14 @@ class ProviderRegistry:
     """
 
     _PROVIDER_CLASSES: Dict[str, type] = {
-        "gemini": GeminiProvider,
         "openrouter": OpenRouterProvider,
         "nvidia": NvidiaProvider,
+        "groq": GroqProvider,
+        "gemini": GeminiProvider,
     }
 
     def __init__(self, provider_order: Optional[List[str]] = None) -> None:
-        order = provider_order or ["gemini", "openrouter", "nvidia"]
+        order = provider_order or ["openrouter", "nvidia", "groq", "gemini"]
         self._providers: List[LLMProvider] = [
             self._PROVIDER_CLASSES[n]()  # type: ignore[abstract]
             for n in order

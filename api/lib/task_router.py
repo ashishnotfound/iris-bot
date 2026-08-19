@@ -126,6 +126,41 @@ MODEL_CATALOG: List[ModelSpec] = [
         enabled=True,
     ),
 
+        # ── Groq Cloud (Free Tier — Ultra-fast & Vision) ──
+    ModelSpec(
+        provider="groq",
+        model_id="llama-3.3-70b-versatile",
+        tier=ModelTier.BALANCED,
+        free=True,
+        vision=False,
+        tools=True,
+        reasoning=True,
+        context_window=128000,
+        enabled=True,
+    ),
+    ModelSpec(
+        provider="groq",
+        model_id="llama-3.2-11b-vision-preview",
+        tier=ModelTier.BALANCED,
+        free=True,
+        vision=True,
+        tools=True,
+        reasoning=False,
+        context_window=128000,
+        enabled=True,
+    ),
+    ModelSpec(
+        provider="groq",
+        model_id="llama-3.1-8b-instant",
+        tier=ModelTier.FAST,
+        free=True,
+        vision=False,
+        tools=True,
+        reasoning=False,
+        context_window=128000,
+        enabled=True,
+    ),
+
     # ── NVIDIA NIM (Free Credits API) ──
     ModelSpec(
         provider="nvidia",
@@ -281,7 +316,7 @@ class TaskRouter:
         if active_providers is not None:
             active = set(active_providers)
         else:
-            active = {"gemini", "openrouter", "nvidia"}
+            active = {"openrouter", "nvidia", "groq", "gemini"}
 
         # ── 1. Check Manual Override ──
         if manual_model_override and manual_model_override.strip().lower() not in ("auto", ""):
@@ -358,7 +393,7 @@ class TaskRouter:
             ModelTier.BALANCED: {ModelTier.BALANCED: 0, ModelTier.POWERFUL: 1, ModelTier.FAST: 2},
             ModelTier.FAST:     {ModelTier.FAST: 0, ModelTier.BALANCED: 1, ModelTier.POWERFUL: 2},
         }
-        prov_weights = {"gemini": 0, "openrouter": 1, "nvidia": 2}
+        prov_weights = {"openrouter": 0, "nvidia": 1, "groq": 2, "gemini": 3}
 
         def _sort_key(spec: ModelSpec) -> Tuple[int, int]:
             tier_dist = tier_weights[target_tier].get(spec.tier, 9)
